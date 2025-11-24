@@ -1,25 +1,27 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <style>
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 10px; background: #f8f9fa; color: #333; }
     h3 { border-bottom: 2px solid #0078d4; padding-bottom: 10px; color: #2b2b2b; margin-top: 0; }
     
+    /* The Hidden Input Trick */
+    #folderInput { display: none; }
+    
     /* Buttons */
-    .btn { width: 100%; padding: 10px; margin-top: 8px; background: #0078d4; color: white; border: none; cursor: pointer; border-radius: 4px; font-weight: 600; transition: background 0.2s; }
+    .btn { width: 100%; padding: 10px; margin-top: 8px; background: #0078d4; color: white; border: none; cursor: pointer; border-radius: 4px; font-weight: 600; text-align: center; display: block; box-sizing: border-box; }
     .btn:hover { background: #005a9e; }
     .btn-secondary { background: #6c757d; }
     .btn-secondary:hover { background: #5a6268; }
     
     /* Gem Cards */
     .gem-card { background: white; padding: 10px; margin-bottom: 8px; border-radius: 6px; border-left: 5px solid #0078d4; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-    .gem-card label { cursor: pointer; display: block; display: flex; align-items: center; gap: 8px; }
+    .gem-card label { cursor: pointer; display: flex; align-items: center; gap: 8px; }
     .gem-info { font-size: 0.8em; color: #666; display: block; margin-top: 4px; margin-left: 24px; }
 
-    /* Inputs */
     textarea { width: 95%; margin-bottom: 10px; padding: 8px; border: 1px solid #ced4da; border-radius: 4px; font-family: inherit; resize: vertical; box-sizing: border-box; }
     
-    /* Status */
     #folderStatus { font-size: 12px; margin-bottom: 15px; font-weight: bold; padding: 5px; border-radius: 4px; text-align: center; }
     .status-missing { background: #f8d7da; color: #721c24; }
     .status-linked { background: #d1e7dd; color: #0f5132; }
@@ -28,11 +30,13 @@
 <body>
   <h3>💎 GeminiTeams</h3>
   
-  <button id="linkFolderBtn" class="btn btn-secondary">📂 Link Knowledge Folder</button>
-  <div id="folderStatus" class="status-missing">⚠️ No Folder Linked</div>
+  <label for="folderInput" class="btn btn-secondary">📂 Load Knowledge Folder</label>
+  <input type="file" id="folderInput" webkitdirectory directory multiple />
+  
+  <div id="folderStatus" class="status-missing">⚠️ No Folder Loaded</div>
 
   <div id="gemList">
-      <p style="text-align:center; color:#666; font-size: 0.9em;">Link a folder to detect Specialists.</p>
+      <p style="text-align:center; color:#666; font-size: 0.9em;">Load a folder to detect Specialists.</p>
   </div>
 
   <hr>

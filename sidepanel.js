@@ -1,17 +1,58 @@
 /* .About
     File Name:  sidepanel.js
     Author:     Kristopher Roy
-    Purpose:    v2.1 - Data Portability + Enhanced PM Logic
+    Purpose:    v2.2 - Remote Config (GitHub) + MutationObserver Reliability
 */
 
 // --- CONFIGURATION ---
 const MAX_LOOPS = 5;
+// *** ACTION REQUIRED: PASTE YOUR RAW GITHUB JSON URL HERE ***
+const GITHUB_CONFIG_URL = "https://raw.githubusercontent.com/tankcr/GemeniTeams/refs/heads/main/selectors.json"; 
+
 let loopCount = 0;
 let currentKnowledgeText = ""; 
 let globalGems = []; 
 
-// --- 1. DEFINITIONS (HOISTED) ---
+// Default Fallback Selectors (The Engineer's Safety Net)
+let SELECTORS = {
+    editor: '.ql-editor, div[contenteditable="true"]',
+    sendBtn: 'button[aria-label="Send message"], button.send-button'
+};
 
+// --- 1. INITIALIZATION ---
+window.addEventListener('load', async () => {
+    try {
+        console.log("GeminiTeams: UI Loaded.");
+        await fetchRemoteConfig(); // Fetch the "Brain" first
+        loadGems();
+        setupEventListeners();
+    } catch (e) {
+        console.error("GeminiTeams Init Error:", e);
+    }
+});
+
+// --- REMOTE CONFIG ENGINE ---
+async function fetchRemoteConfig() {
+    try {
+        console.log("GeminiTeams: Fetching remote selectors...");
+        const response = await fetch(GITHUB_CONFIG_URL, { cache: "no-store" });
+        if (!response.ok) throw new Error("Network response was not ok");
+        
+        const remoteSelectors = await response.json();
+        
+        // Validation: Ensure keys exist before overwriting
+        if (remoteSelectors.editor && remoteSelectors.sendBtn) {
+            SELECTORS = remoteSelectors;
+            console.log("GeminiTeams: Remote config loaded successfully. 🟢");
+        } else {
+            console.warn("GeminiTeams: Remote config invalid. Using Fallback. 🟡");
+        }
+    } catch (error) {
+        console.warn(`GeminiTeams: Could not fetch remote config (${error.message}). Using Fallback. 🟡`);
+    }
+}
+
+// --- 2. UI SETUP ---
 function setupEventListeners() {
     // A. Navigation
     const goCreate = document.getElementById('goToCreateBtn');
@@ -23,7 +64,7 @@ function setupEventListeners() {
         showScreen('screen-meeting');
     });
 
-    // B. File Upload (Knowledge Base)
+    // B. File Upload
     const fileInput = document.getElementById('hiddenFile');
     const uploadArea = document.getElementById('uploadClickArea');
     
@@ -37,7 +78,7 @@ function setupEventListeners() {
         });
     }
 
-    // C. Data Controls (Import/Export)
+    // C. Data Controls
     const exportBtn = document.getElementById('exportBtn');
     const importBtn = document.getElementById('importBtn');
     const importFile = document.getElementById('importFile');
@@ -75,16 +116,12 @@ function resetForm() {
     currentKnowledgeText = "";
 }
 
-// --- DATA PORTABILITY ---
+// --- 3. DATA & STORAGE ---
 async function exportTeamData() {
     if (globalGems.length === 0) return alert("No specialists to export.");
-    
-    // Create JSON Blob
     const dataStr = JSON.stringify(globalGems, null, 2);
     const blob = new Blob([dataStr], {type: "application/json"});
     const url = URL.createObjectURL(blob);
-    
-    // Trigger Download
     const a = document.createElement('a');
     a.href = url;
     a.download = "gemini_team_backup.json";
@@ -97,14 +134,10 @@ async function exportTeamData() {
 async function importTeamData(e) {
     const file = e.target.files[0];
     if (!file) return;
-
     try {
         const text = await file.text();
         const importedGems = JSON.parse(text);
-        
         if (!Array.isArray(importedGems)) throw new Error("Invalid JSON format");
-
-        // Merge Strategy: Append new gems to existing list
         if(confirm(`Found ${importedGems.length} specialists. Import them?`)) {
             globalGems = [...globalGems, ...importedGems];
             await chrome.storage.local.set({ myGems: globalGems });
@@ -114,11 +147,9 @@ async function importTeamData(e) {
     } catch (err) {
         alert("Import Failed: " + err.message);
     }
-    // Reset input so same file can be selected again if needed
     e.target.value = ''; 
 }
 
-// --- STORAGE ---
 async function loadGems() {
     const container = document.getElementById('gemList');
     if (!container) return;
@@ -164,24 +195,20 @@ async function loadGems() {
 async function saveGem() {
     const name = document.getElementById('newGemName').value;
     const role = document.getElementById('newGemRole').value;
-    
     if (!name || !role) return alert("Name and Instructions are required.");
-
     const newGem = {
         name: name,
         instruction: role,
         knowledge: currentKnowledgeText || ""
     };
-
     globalGems.push(newGem);
     await chrome.storage.local.set({ myGems: globalGems });
-    
     resetForm();
     showScreen('screen-meeting');
     loadGems();
 }
 
-// --- MEETING ENGINE ---
+// --- 4. MEETING ENGINE ---
 async function startMeeting() {
     const selectedIndices = Array.from(document.querySelectorAll('#gemList input:checked')).map(cb => cb.value);
     const userTopic = document.getElementById('userInput').value;
@@ -191,14 +218,13 @@ async function startMeeting() {
 
     await ensureGeminiTab();
     loopCount = 0;
-    
     const selectedGems = selectedIndices.map(idx => globalGems[idx]);
     runMeetingLoop(selectedGems, userTopic, "User");
 }
 
 async function runMeetingLoop(selectedGems, topic, lastSpeaker) {
     if (loopCount >= MAX_LOOPS) {
-        alert("Max conversation loops reached. Stopping for safety.");
+        alert("Max conversation loops reached.");
         resetUI();
         return;
     }
@@ -221,9 +247,7 @@ CORE INSTRUCTIONS: ${gem.instruction}
 CONTEXT: A multi-agent meeting. The previous input was from: ${currentContext}.
 TOPIC: ${topic}
 YOUR KNOWLEDGE BASE: ${gem.knowledge.substring(0, 15000)}
-
 TASK: Offer your expert technical input based on your Role and Knowledge.
-
 *** CRITICAL INSTRUCTION: NOISE REDUCTION ***
 1. IF the previous speaker has already accurately covered the topic from your domain's perspective:
    - Respond ONLY with: "I have reviewed the conversation and concur. No additional constraints from [${gem.name}]."
@@ -233,17 +257,16 @@ DO NOT repeat information already stated.
             `;
 
             await injectPromptIntoGemini(prompt);
-            await waitForIdleState(); 
+            await waitForIdleState(); // Uses new MutationObserver
             currentContext = gem.name;
             await new Promise(r => setTimeout(r, 2000));
         }
 
-        // B. PM PHASE (Updated per user request)
+        // B. PM PHASE
         if(btn) btn.innerText = "👨‍💼 PM Synthesizing...";
         const pmPrompt = `
 *** ROLE: Project Manager ***
 CONTEXT: Review the responses from the specialists above regarding "${topic}".
-
 TASK:
 1. Summarize the technical consensus so far.
 2. CRITICAL: Explicitly ask the user if they would like additional feedback from any specific specialists, or if they are ready to proceed.
@@ -276,11 +299,7 @@ function resetUI() {
     }
 }
 
-// --- UTILS (Selectors Hardcoded for Stability Fallback) ---
-const SELECTORS = {
-    editor: '.ql-editor, div[contenteditable="true"]',
-    sendBtn: 'button[aria-label="Send message"], button.send-button'
-};
+// --- UTILS (Injection & Observation) ---
 
 async function ensureGeminiTab() {
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -300,6 +319,7 @@ async function ensureGeminiTab() {
 
 async function injectPromptIntoGemini(text) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    // Pass SELECTORS to the injected function
     await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: (msg, sel) => {
@@ -320,20 +340,43 @@ async function injectPromptIntoGemini(text) {
     });
 }
 
+// UPGRADED: MutationObserver (No more polling!)
 async function waitForIdleState() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: (sel) => {
             return new Promise((resolve) => {
-                const checkInterval = setInterval(() => {
-                    const sendBtn = document.querySelector(sel.sendBtn);
-                    const isIdle = sendBtn && !sendBtn.hasAttribute('disabled') && sendBtn.getAttribute('aria-disabled') !== 'true';
+                const getBtn = () => document.querySelector(sel.sendBtn);
+                
+                // 1. Immediate Check
+                const btn = getBtn();
+                if (btn && !btn.hasAttribute('disabled') && btn.getAttribute('aria-disabled') !== 'true') {
+                    return resolve(true);
+                }
+
+                // 2. Observer
+                const observer = new MutationObserver(() => {
+                    const currentBtn = getBtn();
+                    const isIdle = currentBtn && !currentBtn.hasAttribute('disabled') && currentBtn.getAttribute('aria-disabled') !== 'true';
                     if (isIdle) {
-                        clearInterval(checkInterval);
+                        observer.disconnect();
                         resolve(true);
                     }
-                }, 1000);
+                });
+
+                // Watch the body subtree for attribute changes on buttons
+                observer.observe(document.body, { 
+                    subtree: true, 
+                    attributes: true, 
+                    attributeFilter: ['disabled', 'aria-disabled']
+                });
+
+                // Safety Timeout (45s)
+                setTimeout(() => {
+                    observer.disconnect();
+                    resolve(true);
+                }, 45000);
             });
         },
         args: [SELECTORS]
@@ -362,14 +405,3 @@ async function waitForUserReply() {
         }
     }).then(results => results[0].result);
 }
-
-// --- 2. EXECUTION ---
-window.addEventListener('load', () => {
-    try {
-        console.log("GeminiTeams: UI Loaded.");
-        loadGems();
-        setupEventListeners();
-    } catch (e) {
-        console.error("GeminiTeams Init Error:", e);
-    }
-});

@@ -1,305 +1,340 @@
 /* .About
     File Name:  sidepanel.js
     Author:     Kristopher Roy
-    Purpose:    v2.5 - Dynamic Squad Protocol + Role Specific Overrides (The "Yes, And" Patch)
+    Purpose:    v3.0 - Full CRUD, Edit Mode, Color Customization
 */
 
-// --- CONFIGURATION ---
 const MAX_LOOPS = 5;
-// *** ACTION REQUIRED: PASTE YOUR RAW GITHUB JSON URL HERE ***
 const GITHUB_CONFIG_URL = "https://raw.githubusercontent.com/tankcr/GemeniTeams/refs/heads/main/selectors.json"; 
 
 let loopCount = 0;
-let currentKnowledgeText = ""; 
+let stopSignal = false;
 let globalGems = []; 
-
-// Default Fallback Selectors
-let SELECTORS = {
-    editor: '.ql-editor, div[contenteditable="true"]',
-    sendBtn: 'button[aria-label="Send message"], button.send-button'
-};
+let tempCreateKnowledge = ""; // For new gem creation
+let SELECTORS = { editor: '.ql-editor, div[contenteditable="true"]', sendBtn: 'button[aria-label="Send message"]' };
 
 // --- 1. INITIALIZATION ---
 window.addEventListener('load', async () => {
-    try {
-        console.log("GeminiTeams: UI Loaded.");
-        await fetchRemoteConfig();
-        loadGems();
-        setupEventListeners();
-    } catch (e) {
-        console.error("GeminiTeams Init Error:", e);
-    }
+    await fetchRemoteConfig();
+    loadGems();
+    setupEventListeners();
 });
 
 async function fetchRemoteConfig() {
     try {
-        const response = await fetch(GITHUB_CONFIG_URL, { cache: "no-store" });
-        if (!response.ok) throw new Error("Network response was not ok");
-        const remoteSelectors = await response.json();
-        
-        if (remoteSelectors.editor && remoteSelectors.sendBtn) {
-            SELECTORS = remoteSelectors;
-            console.log("GeminiTeams: Remote config loaded successfully. 🟢");
-        } else {
-            console.warn("GeminiTeams: Remote config invalid. Using Fallback. 🟡");
+        const r = await fetch(GITHUB_CONFIG_URL);
+        if (r.ok) {
+            const json = await r.json();
+            if (json.editor) SELECTORS = json;
         }
-    } catch (error) {
-        console.warn(`GeminiTeams: Could not fetch remote config (${error.message}). Using Fallback. 🟡`);
-    }
+    } catch (e) { console.warn("Using Fallback Config"); }
 }
 
 function setupEventListeners() {
-    const goCreate = document.getElementById('goToCreateBtn');
-    const cancelCreate = document.getElementById('cancelCreateBtn');
-    if(goCreate) goCreate.addEventListener('click', () => showScreen('screen-create'));
-    if(cancelCreate) cancelCreate.addEventListener('click', () => { resetForm(); showScreen('screen-meeting'); });
+    // Navigation
+    document.getElementById('goToCreateBtn').addEventListener('click', () => showScreen('screen-create'));
+    document.getElementById('cancelCreateBtn').addEventListener('click', () => showScreen('screen-meeting'));
 
-    const fileInput = document.getElementById('hiddenFile');
-    const uploadArea = document.getElementById('uploadClickArea');
-    if (uploadArea && fileInput) {
-        uploadArea.addEventListener('click', () => fileInput.click());
-        fileInput.addEventListener('change', async (e) => {
+    // New Gem Creation Logic
+    const newFileBtn = document.getElementById('newFileBtn');
+    const newFileInput = document.getElementById('newFileInput');
+    if (newFileBtn) {
+        newFileBtn.addEventListener('click', () => newFileInput.click());
+        newFileInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
-            document.getElementById('fileNameDisplay').innerText = `📄 ${file.name}`;
-            currentKnowledgeText = await file.text();
+            document.getElementById('newFileDisplay').innerText = `📄 ${file.name}`;
+            tempCreateKnowledge = await file.text();
         });
     }
+    document.getElementById('saveGemBtn').addEventListener('click', createNewGem);
 
-    const exportBtn = document.getElementById('exportBtn');
-    const importBtn = document.getElementById('importBtn');
-    const importFile = document.getElementById('importFile');
-    if (exportBtn) exportBtn.addEventListener('click', exportTeamData);
-    if (importBtn && importFile) {
-        importBtn.addEventListener('click', () => importFile.click());
-        importFile.addEventListener('change', importTeamData);
+    // Meeting Controls
+    document.getElementById('startMeetingBtn').addEventListener('click', startMeeting);
+    document.getElementById('resetBtn').addEventListener('click', resetConversation);
+
+    // Import/Export
+    document.getElementById('exportBtn').addEventListener('click', exportTeamData);
+    const impBtn = document.getElementById('importBtn');
+    const impFile = document.getElementById('importFile');
+    if (impBtn) {
+        impBtn.addEventListener('click', () => impFile.click());
+        impFile.addEventListener('change', importTeamData);
     }
-
-    const saveBtn = document.getElementById('saveGemBtn');
-    if(saveBtn) saveBtn.addEventListener('click', saveGem);
-    const startBtn = document.getElementById('startMeetingBtn');
-    if(startBtn) startBtn.addEventListener('click', startMeeting);
+    
+    // Shared Update Input (For editing existing gems)
+    document.getElementById('updateFileInput').addEventListener('change', handleUpdateFile);
 }
 
-const showScreen = (id) => {
-    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active-screen'));
-    const target = document.getElementById(id);
-    if(target) target.classList.add('active-screen');
-};
-
-function resetForm() {
-    const nameInput = document.getElementById('newGemName');
-    const roleInput = document.getElementById('newGemRole');
-    const fileInput = document.getElementById('hiddenFile');
-    const display = document.getElementById('fileNameDisplay');
-    if(nameInput) nameInput.value = "";
-    if(roleInput) roleInput.value = "";
-    if(fileInput) fileInput.value = "";
-    if(display) display.innerText = "📂 Click to Attach File";
-    currentKnowledgeText = "";
-}
-
-// --- 2. DATA OPS ---
-async function exportTeamData() {
-    if (globalGems.length === 0) return alert("No specialists to export.");
-    const dataStr = JSON.stringify(globalGems, null, 2);
-    const blob = new Blob([dataStr], {type: "application/json"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = "gemini_team_backup.json";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-}
-
-async function importTeamData(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    try {
-        const text = await file.text();
-        const importedGems = JSON.parse(text);
-        if (!Array.isArray(importedGems)) throw new Error("Invalid JSON");
-        if(confirm(`Found ${importedGems.length} specialists. Import?`)) {
-            globalGems = [...globalGems, ...importedGems];
-            await chrome.storage.local.set({ myGems: globalGems });
-            loadGems();
-            alert("Import success!");
-        }
-    } catch (err) { alert("Import Failed: " + err.message); }
-    e.target.value = ''; 
-}
-
+// --- 2. RENDER & EDIT LOGIC (The Big Change) ---
 async function loadGems() {
     const container = document.getElementById('gemList');
-    if (!container) return;
     container.innerHTML = '';
     
-    if (!chrome.storage || !chrome.storage.local) {
-        container.innerHTML = '<p style="color:red">Error: Storage permission missing.</p>';
-        return;
-    }
-
     const result = await chrome.storage.local.get("myGems");
     globalGems = result.myGems || [];
 
     if (globalGems.length === 0) {
-        container.innerHTML = '<p style="text-align:center; color:#888; margin-top:30px; font-size: 0.9em;">No Specialists hired yet.</p>';
+        container.innerHTML = '<p style="text-align:center; color:#888; margin-top:20px;">No Specialists.</p>';
         return;
     }
 
     globalGems.forEach((gem, index) => {
-        const div = document.createElement('div');
-        div.className = 'gem-card';
-        div.innerHTML = `
-            <label>
-                <input type="checkbox" value="${index}" checked> 
-                <span>${gem.name}</span>
-            </label>
-            <span class="delete-btn" data-index="${index}" title="Remove">×</span>
+        const card = document.createElement('div');
+        card.className = 'gem-card';
+        card.style.borderLeftColor = gem.color || '#ccc'; // Visual indicator
+
+        // HTML Structure for View + Edit Mode
+        card.innerHTML = `
+            <div class="gem-header">
+                <label class="gem-label">
+                    <input type="checkbox" value="${index}" checked> 
+                    <span style="color:${gem.color || '#333'}">●</span>
+                    <span>${gem.name}</span>
+                </label>
+                <div>
+                    <span class="icon-btn settings-toggle" data-index="${index}">⚙️</span>
+                    <span class="icon-btn delete" data-index="${index}">🗑️</span>
+                </div>
+            </div>
+            
+            <div class="edit-panel" id="edit-panel-${index}">
+                <div class="edit-field">
+                    <label>Name</label>
+                    <input type="text" class="edit-input" id="edit-name-${index}" value="${gem.name}">
+                </div>
+                <div class="edit-field">
+                    <label>Instructions</label>
+                    <textarea rows="3" class="edit-input" id="edit-role-${index}">${gem.instruction}</textarea>
+                </div>
+                <div class="color-row">
+                    <label>Border Color:</label>
+                    <input type="color" id="edit-color-${index}" value="${gem.color || '#0078d4'}">
+                </div>
+                <div style="display:flex; gap:5px; margin-top:5px;">
+                    <button class="btn-small update-file-btn" data-index="${index}">📂 Update File</button>
+                    <button class="btn-small" style="background:#0078d4; color:white;" onclick="saveGemEdits(${index})">Save Changes</button>
+                </div>
+                <div id="edit-file-status-${index}" style="font-size:0.7em; color:green; margin-top:2px;"></div>
+            </div>
         `;
-        container.appendChild(div);
+        container.appendChild(card);
     });
 
-    document.querySelectorAll('.delete-btn').forEach(btn => {
+    // Attach Listeners
+    document.querySelectorAll('.settings-toggle').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const idx = e.target.dataset.index;
+            const panel = document.getElementById(`edit-panel-${idx}`);
+            panel.classList.toggle('open');
+        });
+    });
+
+    document.querySelectorAll('.delete').forEach(btn => {
         btn.addEventListener('click', async (e) => {
-            if(!confirm("Fire this Specialist?")) return;
-            const idx = e.target.getAttribute('data-index');
-            globalGems.splice(idx, 1);
-            await chrome.storage.local.set({ myGems: globalGems });
-            loadGems();
+            if(confirm("Delete Specialist?")) {
+                globalGems.splice(e.target.dataset.index, 1);
+                await chrome.storage.local.set({ myGems: globalGems });
+                loadGems();
+            }
+        });
+    });
+
+    // File Update Listener
+    document.querySelectorAll('.update-file-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            // Trigger the shared hidden input, store the index we are editing
+            const input = document.getElementById('updateFileInput');
+            input.setAttribute('data-editing-index', e.target.dataset.index);
+            input.click();
         });
     });
 }
 
-async function saveGem() {
+// --- 3. CRUD OPERATIONS ---
+
+async function createNewGem() {
     const name = document.getElementById('newGemName').value;
     const role = document.getElementById('newGemRole').value;
-    if (!name || !role) return alert("Name/Instructions required.");
-    globalGems.push({ name: name, instruction: role, knowledge: currentKnowledgeText || "" });
+    const color = document.getElementById('newGemColor').value;
+    
+    if (!name || !role) return alert("Name required");
+    
+    globalGems.push({ 
+        name, 
+        instruction: role, 
+        knowledge: tempCreateKnowledge || "",
+        color: color
+    });
+    
     await chrome.storage.local.set({ myGems: globalGems });
-    resetForm();
+    
+    // Reset & Switch
+    document.getElementById('newGemName').value = "";
+    document.getElementById('newGemRole').value = "";
+    tempCreateKnowledge = "";
     showScreen('screen-meeting');
     loadGems();
 }
 
-// --- 3. MEETING ENGINE (SQUAD AWARE + ROLE OVERRIDES) ---
+// Global function for the HTML onclick
+window.saveGemEdits = async (index) => {
+    const name = document.getElementById(`edit-name-${index}`).value;
+    const role = document.getElementById(`edit-role-${index}`).value;
+    const color = document.getElementById(`edit-color-${index}`).value;
+    
+    globalGems[index].name = name;
+    globalGems[index].instruction = role;
+    globalGems[index].color = color;
+    
+    await chrome.storage.local.set({ myGems: globalGems });
+    loadGems(); // Re-render to show changes
+};
+
+async function handleUpdateFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const idx = e.target.getAttribute('data-editing-index');
+    
+    const text = await file.text();
+    globalGems[idx].knowledge = text;
+    
+    // Visual feedback
+    document.getElementById(`edit-file-status-${idx}`).innerText = `Updated: ${file.name}`;
+    // Save immediately (optional, or wait for Save button)
+    // For safety, we just update memory, user must click "Save Changes" to persist DB? 
+    // Let's persist immediately for file uploads to avoid data loss.
+    await chrome.storage.local.set({ myGems: globalGems });
+}
+
+// --- 4. MEETING ENGINE (COLOR AWARE) ---
+
 async function startMeeting() {
     const selectedIndices = Array.from(document.querySelectorAll('#gemList input:checked')).map(cb => cb.value);
     const topicEl = document.getElementById('userInput');
     
-    if (selectedIndices.length === 0) return alert("Select at least one Specialist.");
-    if (!topicEl || !topicEl.value) return alert("Please provide a topic.");
+    if (selectedIndices.length === 0) return alert("Select Specialist");
+    if (!topicEl.value) return alert("Enter Topic");
 
     await ensureGeminiTab();
-    await updateHUD("Initializing Team...", "#333");
-
-    loopCount = 0;
-    const selectedGems = selectedIndices.map(idx => globalGems[idx]);
+    await updateHUD("Initializing...", "#333");
     
-    // Create Squad Context
+    document.getElementById('resetBtn').style.display = 'block';
+    stopSignal = false;
+    loopCount = 0;
+    
+    const selectedGems = selectedIndices.map(idx => globalGems[idx]);
     const squadNames = selectedGems.map(g => g.name).join(", ");
+    
     runMeetingLoop(selectedGems, topicEl.value, "User", squadNames);
 }
 
 async function runMeetingLoop(selectedGems, topic, lastSpeaker, squadNames) {
-    if (loopCount >= MAX_LOOPS) {
-        await updateHUD("Max Loops Reached.", "#dc3545");
+    if (stopSignal || loopCount >= MAX_LOOPS) {
+        await removeHUD();
         resetUI();
         return;
     }
     loopCount++;
-
-    const btn = document.getElementById('startMeetingBtn');
-    if(btn) { btn.innerText = `🔄 Round ${loopCount}: Specialists working...`; btn.disabled = true; }
+    document.getElementById('startMeetingBtn').disabled = true;
 
     try {
         let currentContext = lastSpeaker;
 
-        // A. SPECIALIST PHASE
         for (const gem of selectedGems) {
+            if (stopSignal) return;
             
-            await updateHUD(`${gem.name} is thinking...`, "#0078d4");
+            // USE THE GEM'S CUSTOM COLOR
+            await updateHUD(`${gem.name} is thinking...`, gem.color || "#0078d4");
 
-            // *** DYNAMIC HIERARCHY PROTOCOL + ROLE OVERRIDES ***
             const prompt = `
 *** ROLE: ${gem.name} ***
 CORE INSTRUCTIONS: ${gem.instruction}
-
-*** SQUAD PROTOCOL: DYNAMIC DEFERENCE ***
+*** SQUAD PROTOCOL ***
 ACTIVE TEAM: ${squadNames}
 CURRENT TOPIC: "${topic}"
-
-RULES OF ENGAGEMENT:
-1. IDENTIFY THE EXPERT: Look at the 'Active Team' list and the 'Current Topic'.
-2. SELF-ASSESSMENT: Are you the execution authority?
-   - IF YES: Provide concrete plan/code.
-   - IF NO: Defer execution details to the Authority.
-3. ROLE SPECIFIC OVERRIDES (The "Yes, And" Rule):
-   - **Creative/Designers:** If the topic is technical (e.g., scraping, databases), DO NOT discuss the backend. Instead, ask: "How will we visualize this?" or "What is the user experience?" Pivot to Dashboards, UI, or UX immediately.
-   - **Architects:** Focus on Risk, Scope, and Integration. Do not debug code unless it breaks architecture.
-
+RULES:
+1. IDENTIFY EXPERT: Are you the execution authority?
+   - YES: Provide plan/code.
+   - NO: Defer to authority.
+2. OVERRIDES:
+   - Creatives: Pivot to UI/UX/Visualization.
+   - Architects: Focus on Risk/Scope.
 CONTEXT: Previous input from: ${currentContext}.
-YOUR KNOWLEDGE BASE: ${gem.knowledge.substring(0, 15000)}
-
-TASK: Offer your expert input adhering to the PROTOCOL above.
+KNOWLEDGE BASE: ${gem.knowledge.substring(0, 15000)}
+TASK: Offer expert input.
             `;
 
             await injectPromptIntoGemini(prompt);
-            await waitForIdleState(); 
+            await waitForIdleState();
             currentContext = gem.name;
             await new Promise(r => setTimeout(r, 2000));
         }
 
-        // B. PM PHASE
-        await updateHUD("Project Manager Synthesizing...", "#28a745");
-        if(btn) btn.innerText = "👨‍💼 PM Synthesizing...";
-        
-        const pmPrompt = `
-*** ROLE: Project Manager ***
-CONTEXT: Review responses regarding "${topic}".
-TASK: Summarize consensus and ask User if they want more feedback from specific specialists.
-        `;
-        await injectPromptIntoGemini(pmPrompt);
+        if (stopSignal) return;
+
+        await updateHUD("PM Synthesizing...", "#28a745");
+        await injectPromptIntoGemini(`*** ROLE: PM ***\nCONTEXT: Review responses on "${topic}".\nTASK: Summarize and ask if User wants more details.`);
         await waitForIdleState();
 
-        // C. LISTENING PHASE
-        await updateHUD("Waiting for User Reply...", "#666");
-        if(btn) btn.innerText = "👂 Listening...";
-        
-        const userReply = await waitForUserReply();
-        if (userReply) {
-            runMeetingLoop(selectedGems, userReply, "The User (You)", squadNames);
+        if (stopSignal) return;
+
+        await updateHUD("Waiting for Reply...", "#666");
+        const reply = await waitForUserReply();
+        if (reply && !stopSignal) {
+            runMeetingLoop(selectedGems, reply, "User", squadNames);
         } else {
-             await removeHUD(); 
-             resetUI();
+            resetUI();
         }
 
-    } catch (error) {
-        console.error(error);
-        await updateHUD("Error: " + error.message, "red");
+    } catch (e) {
+        console.error(e);
         resetUI();
     }
 }
 
-function resetUI() {
-    const btn = document.getElementById('startMeetingBtn');
-    if(btn) { btn.innerText = "🚀 Start Team Meeting"; btn.disabled = false; }
+async function resetConversation() {
+    stopSignal = true;
+    await removeHUD();
+    resetUI();
 }
 
-// --- UTILS & VISUAL INJECTION ---
+function resetUI() {
+    document.getElementById('startMeetingBtn').disabled = false;
+    document.getElementById('resetBtn').style.display = 'none';
+    removeHUD();
+}
+
+// --- UTILS ---
+const showScreen = (id) => {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active-screen'));
+    document.getElementById(id).classList.add('active-screen');
+};
+
+async function exportTeamData() {
+    const blob = new Blob([JSON.stringify(globalGems, null, 2)], {type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = "gemini_team.json";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+
+async function importTeamData(e) {
+    try {
+        const text = await e.target.files[0].text();
+        const json = JSON.parse(text);
+        if(confirm("Import Team?")) {
+            globalGems = [...globalGems, ...json];
+            await chrome.storage.local.set({ myGems: globalGems });
+            loadGems();
+        }
+    } catch (e) { alert("Import Error"); }
+}
 
 async function ensureGeminiTab() {
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.url || !tab.url.includes("gemini.google.com")) {
-        const geminiTabs = await chrome.tabs.query({ url: "*://gemini.google.com/*" });
-        if (geminiTabs.length > 0) {
-            await chrome.tabs.update(geminiTabs[0].id, { active: true });
-        } else {
-            await chrome.tabs.create({ url: "https://gemini.google.com" });
-        }
-        await new Promise(r => setTimeout(r, 2000));
+    if (!tab || !tab.url.includes("gemini.google.com")) {
+        await chrome.tabs.create({ url: "https://gemini.google.com" });
     }
 }
 
@@ -307,24 +342,19 @@ async function updateHUD(text, color) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: (statusText, statusColor) => {
-            let hud = document.getElementById('gemini-teams-hud');
-            if (!hud) {
-                hud = document.createElement('div');
-                hud.id = 'gemini-teams-hud';
-                Object.assign(hud.style, {
-                    position: 'fixed', top: '20px', right: '20px', padding: '12px 20px',
-                    background: 'rgba(255, 255, 255, 0.9)', backdropFilter: 'blur(10px)',
-                    borderRadius: '12px', boxShadow: '0 4px 15px rgba(0,0,0,0.1)',
-                    borderLeft: '5px solid #333', zIndex: '9999',
-                    fontFamily: 'Segoe UI, sans-serif', fontSize: '14px', fontWeight: '600',
-                    color: '#333', transition: 'all 0.3s ease', opacity: '0', transform: 'translateY(-10px)'
+        func: (t, c) => {
+            let h = document.getElementById('gemini-hud');
+            if (!h) {
+                h = document.createElement('div'); h.id = 'gemini-hud';
+                Object.assign(h.style, {
+                    position:'fixed', top:'20px', right:'20px', padding:'10px 20px',
+                    background:'rgba(255,255,255,0.95)', borderLeft:'5px solid #333',
+                    borderRadius:'8px', boxShadow:'0 4px 12px rgba(0,0,0,0.15)',
+                    zIndex:'99999', fontFamily:'sans-serif', fontSize:'14px', fontWeight:'bold'
                 });
-                document.body.appendChild(hud);
-                requestAnimationFrame(() => { hud.style.opacity = '1'; hud.style.transform = 'translateY(0)'; });
+                document.body.appendChild(h);
             }
-            hud.style.borderLeftColor = statusColor;
-            hud.innerText = statusText;
+            h.style.borderLeftColor = c; h.innerText = t; h.style.display = 'block';
         },
         args: [text, color]
     });
@@ -334,10 +364,7 @@ async function removeHUD() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: () => {
-            const hud = document.getElementById('gemini-teams-hud');
-            if (hud) { hud.style.opacity = '0'; setTimeout(() => hud.remove(), 500); }
-        }
+        func: () => { const h = document.getElementById('gemini-hud'); if(h) h.style.display='none'; }
     });
 }
 
@@ -345,16 +372,15 @@ async function injectPromptIntoGemini(text) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: (msg, sel) => {
-            const editor = document.querySelector(sel.editor); 
+        func: async (msg, sel) => {
+            const editor = document.querySelector(sel.editor);
             if (editor) {
                 editor.focus();
                 document.execCommand('selectAll', false, null);
                 document.execCommand('insertText', false, msg);
-                setTimeout(() => {
-                    const sendBtn = document.querySelector(sel.sendBtn);
-                    if(sendBtn) sendBtn.click();
-                }, 800);
+                await new Promise(r => setTimeout(r, 500));
+                const btn = document.querySelector(sel.sendBtn);
+                if(btn) { btn.click(); await new Promise(r => setTimeout(r, 3000)); }
             }
         },
         args: [text, SELECTORS]
@@ -366,20 +392,14 @@ async function waitForIdleState() {
     await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: (sel) => {
-            return new Promise((resolve) => {
+            return new Promise(r => {
                 const getBtn = () => document.querySelector(sel.sendBtn);
-                const check = () => {
-                    const btn = getBtn();
-                    return btn && !btn.hasAttribute('disabled') && btn.getAttribute('aria-disabled') !== 'true';
-                };
-                
-                if (check()) return resolve(true);
-
-                const observer = new MutationObserver(() => {
-                    if (check()) { observer.disconnect(); resolve(true); }
+                if (getBtn() && !getBtn().hasAttribute('disabled')) return r(true);
+                const obs = new MutationObserver(() => {
+                    if (getBtn() && !getBtn().hasAttribute('disabled')) { obs.disconnect(); r(true); }
                 });
-                observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['disabled'] });
-                setTimeout(() => { observer.disconnect(); resolve(true); }, 45000);
+                obs.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['disabled'] });
+                setTimeout(() => { obs.disconnect(); r(true); }, 45000);
             });
         },
         args: [SELECTORS]
@@ -391,17 +411,13 @@ async function waitForUserReply() {
     return await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
-            return new Promise((resolve) => {
-                const getCount = () => document.querySelectorAll('.user-query').length || document.querySelectorAll('[data-test-id="user-query"]').length;
-                const initial = getCount();
-                const poll = setInterval(() => {
-                    if (getCount() > initial) {
-                        clearInterval(poll);
-                        const queries = document.querySelectorAll('.user-query'); 
-                        resolve(queries[queries.length - 1]?.innerText || "Reply");
-                    }
+            return new Promise(r => {
+                const getC = () => document.querySelectorAll('.user-query').length || document.querySelectorAll('[data-test-id="user-query"]').length;
+                const start = getC();
+                const i = setInterval(() => {
+                    if (getC() > start) { clearInterval(i); r(document.querySelectorAll('.user-query')[start]?.innerText || "Reply"); }
                 }, 1000);
             });
         }
-    }).then(results => results[0].result);
+    }).then(res => res[0].result);
 }

@@ -3,53 +3,75 @@
 <head>
   <meta charset="UTF-8">
   <style>
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 0; margin: 0; background: #f8f9fa; color: #333; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 0; margin: 0; background: #f8f9fa; color: #333; display: flex; flex-direction: column; height: 100vh; }
     
-    header { background: #0078d4; color: white; padding: 15px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    header { background: #0078d4; color: white; padding: 15px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); flex-shrink: 0; }
     h3 { margin: 0; font-size: 1.1em; font-weight: 600; }
     
-    .container { padding: 15px; }
-    .screen { display: none; }
-    .active-screen { display: block; animation: fadeIn 0.3s; }
+    /* SCROLLABLE MAIN AREA */
+    .container { padding: 15px; flex-grow: 1; overflow-y: auto; display: flex; flex-direction: column; }
+    
+    /* Screen Logic */
+    .screen { display: none; height: 100%; flex-direction: column; }
+    .active-screen { display: flex; animation: fadeIn 0.3s; }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-    .gem-card { background: white; padding: 12px; margin-bottom: 8px; border-radius: 6px; border-left: 5px solid #0078d4; box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; justify-content: space-between; align-items: center; }
-    .gem-card label { cursor: pointer; flex-grow: 1; font-weight: 600; display: flex; align-items: center; gap: 10px; user-select: none; }
-    .delete-btn { color: #dc3545; cursor: pointer; font-size: 1.2em; padding: 4px 8px; border-radius: 4px; }
-    .delete-btn:hover { background: #ffe6e6; }
+    /* Gem Cards (Complex) */
+    .gem-card { background: white; padding: 10px; margin-bottom: 8px; border-radius: 6px; border-left: 5px solid #ccc; box-shadow: 0 2px 4px rgba(0,0,0,0.05); transition: all 0.2s; }
+    .gem-header { display: flex; justify-content: space-between; align-items: center; }
+    .gem-label { cursor: pointer; flex-grow: 1; font-weight: 600; display: flex; align-items: center; gap: 10px; user-select: none; }
+    
+    /* Icons */
+    .icon-btn { cursor: pointer; padding: 4px 6px; border-radius: 4px; margin-left: 5px; font-size: 1.1em; color: #666; }
+    .icon-btn:hover { background: #eee; color: #0078d4; }
+    .icon-btn.delete:hover { background: #ffe6e6; color: #dc3545; }
 
-    .btn { width: 100%; padding: 10px; border: none; cursor: pointer; border-radius: 4px; font-weight: 600; margin-top: 10px; font-size: 0.9em; transition: all 0.2s; }
+    /* Edit Panel (Hidden by default) */
+    .edit-panel { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee; animation: slideDown 0.2s; }
+    .edit-panel.open { display: block; }
+    @keyframes slideDown { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* Form Elements within Card */
+    .edit-field { margin-bottom: 8px; }
+    .edit-field label { font-size: 0.75em; color: #888; display: block; margin-bottom: 2px; }
+    .edit-input { width: 100%; padding: 6px; border: 1px solid #eee; border-radius: 4px; font-size: 0.9em; box-sizing: border-box; }
+    
+    /* Color Picker Row */
+    .color-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    input[type="color"] { border: none; width: 30px; height: 30px; cursor: pointer; padding: 0; background: none; }
+
+    /* Standard Inputs */
+    textarea { width: 100%; padding: 8px; border: 1px solid #ced4da; border-radius: 4px; box-sizing: border-box; font-family: inherit; resize: vertical; }
+    
+    /* Footer Controls (Fixed at bottom) */
+    .footer-controls { margin-top: auto; padding-top: 15px; background: #f8f9fa; position: sticky; bottom: 0; }
+
+    /* Buttons */
+    .btn { width: 100%; padding: 10px; border: none; cursor: pointer; border-radius: 4px; font-weight: 600; font-size: 0.9em; transition: all 0.2s; }
     .btn-primary { background: #0078d4; color: white; }
     .btn-primary:hover { background: #005a9e; }
     .btn-secondary { background: #6c757d; color: white; }
-    .btn-secondary:hover { background: #5a6268; }
-    .btn-outline { background: white; border: 2px solid #0078d4; color: #0078d4; }
+    .btn-outline { background: white; border: 2px solid #0078d4; color: #0078d4; margin-bottom: 10px; }
     .btn-outline:hover { background: #f0f8ff; }
     
-    /* New Data Toolbar */
     .data-toolbar { display: flex; gap: 10px; margin-bottom: 15px; }
-    .btn-small { flex: 1; padding: 6px; font-size: 0.8em; margin-top: 0; background: #e9ecef; color: #333; border: 1px solid #ced4da; }
-    .btn-small:hover { background: #dde2e6; }
+    .btn-small { flex: 1; padding: 6px; font-size: 0.8em; background: #e9ecef; border: 1px solid #ced4da; cursor: pointer; }
 
-    input[type="text"], textarea { width: 100%; padding: 10px; margin-bottom: 12px; border: 1px solid #ced4da; border-radius: 4px; box-sizing: border-box; font-family: inherit; }
-    input:focus, textarea:focus { outline: 2px solid #0078d4; border-color: transparent; }
-    label { font-size: 0.85em; font-weight: 600; display: block; margin-bottom: 5px; color: #555; }
-    
-    .file-upload { border: 2px dashed #ccc; padding: 25px; text-align: center; cursor: pointer; background: white; border-radius: 6px; color: #666; transition: border-color 0.2s; }
-    .file-upload:hover { border-color: #0078d4; background: #fafafa; color: #0078d4; }
+    /* Reset Split */
+    .control-group { display: flex; gap: 5px; margin-top: 10px; }
+    #startMeetingBtn { flex-grow: 1; }
+    #resetBtn { display: none; width: auto; background: #dc3545; color: white; }
   </style>
 </head>
 <body>
 
   <div id="screen-meeting" class="screen active-screen">
-    <header>
-      <h3>💎 GeminiTeams</h3>
-    </header>
+    <header><h3>💎 GeminiTeams</h3></header>
+    
     <div class="container">
-      
       <div class="data-toolbar">
-        <button id="importBtn" class="btn btn-small">⬇️ Import Team</button>
-        <button id="exportBtn" class="btn btn-small">⬆️ Export Team</button>
+        <button id="importBtn" class="btn-small">⬇️ Import</button>
+        <button id="exportBtn" class="btn-small">⬆️ Export</button>
       </div>
       <input type="file" id="importFile" style="display:none" accept=".json">
 
@@ -57,34 +79,43 @@
       
       <button id="goToCreateBtn" class="btn btn-outline">➕ Hire New Specialist</button>
       
-      <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-      
-      <label>Meeting Topic:</label>
-      <textarea id="userInput" rows="3" placeholder="What problem are we solving today?"></textarea>
-      <button id="startMeetingBtn" class="btn btn-primary">🚀 Start Team Meeting</button>
+      <input type="file" id="updateFileInput" style="display:none" accept=".txt,.md,.json">
+
+      <div class="footer-controls">
+        <hr style="border: 0; border-top: 1px solid #ccc; margin-bottom: 10px;">
+        <label style="font-weight:600; display:block; margin-bottom:5px;">Meeting Topic:</label>
+        <textarea id="userInput" rows="3" placeholder="What are we solving?"></textarea>
+        
+        <div class="control-group">
+          <button id="startMeetingBtn" class="btn btn-primary">🚀 Start</button>
+          <button id="resetBtn" class="btn">🔄 New</button>
+        </div>
+      </div>
     </div>
   </div>
 
   <div id="screen-create" class="screen">
-    <header style="background: #2b2b2b;">
-      <h3>🛠️ Hire Specialist</h3>
-    </header>
+    <header style="background: #2b2b2b;"><h3>🛠️ Hire Specialist</h3></header>
     <div class="container">
-      <label>Specialist Name</label>
-      <input type="text" id="newGemName" placeholder="e.g. Senior Architect">
+      <label style="font-weight:600">Name</label>
+      <input type="text" id="newGemName" class="edit-input" placeholder="e.g. Lead Developer">
       
-      <label>Core Instructions (Role)</label>
-      <textarea id="newGemRole" rows="3" placeholder="You are an expert in..."></textarea>
+      <label style="font-weight:600">Instructions</label>
+      <textarea id="newGemRole" rows="4" class="edit-input"></textarea>
       
-      <label>Knowledge Base (Upload File)</label>
-      <div class="file-upload" id="uploadClickArea">
-        <span id="fileNameDisplay">📂 Click to Attach .txt/.md/.json</span>
+      <label style="font-weight:600">Color Tag</label>
+      <div class="color-row">
+        <input type="color" id="newGemColor" value="#0078d4">
+        <span style="font-size:0.8em; color:#666;">Select HUD Border Color</span>
       </div>
-      <input type="file" id="hiddenFile" style="display:none" accept=".txt,.md,.json">
-      
-      <div style="display:flex; gap:10px; margin-top: 20px;">
-        <button id="cancelCreateBtn" class="btn btn-secondary">Cancel</button>
+
+      <button id="newFileBtn" class="btn btn-secondary">📂 Attach Knowledge File</button>
+      <span id="newFileDisplay" style="font-size:0.8em; display:block; margin-top:5px;"></span>
+      <input type="file" id="newFileInput" style="display:none">
+
+      <div style="margin-top: auto;">
         <button id="saveGemBtn" class="btn btn-primary">💾 Save Specialist</button>
+        <button id="cancelCreateBtn" class="btn btn-secondary" style="margin-top:10px;">Cancel</button>
       </div>
     </div>
   </div>

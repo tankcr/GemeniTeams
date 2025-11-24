@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "GeminiTeams",
+  "version": "1.0",
+  "description": "Orchestrate a team of Gemini specialists within the browser side panel.",
+  "permissions": ["sidePanel", "storage", "scripting", "activeTab"],
+  "host_permissions": ["https://gemini.google.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Open GeminiTeams"
+  }
+}

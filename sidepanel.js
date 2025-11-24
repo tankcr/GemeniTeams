@@ -1,213 +1,249 @@
 /* .About
     File Name:  sidepanel.js
     Author:     Kristopher Roy
-    Purpose:    Manages Persona CRUD operations and Orchestrates Meetings with Auto-Routing.
-    Updated:    Added Auto-Pilot logic to open gemini.google.com automatically.
+    Purpose:    Full-Duplex Conversational Manager with Auto-Looping & Noise Reduction
 */
 
-// --- STATE MANAGEMENT ---
-let currentKnowledgeText = ""; // Holds file content temporarily during creation
+let loadedFiles = [];
+let gems = [];
+const GEMINI_URL = "https://gemini.google.com";
+let loopCount = 0;
+const MAX_LOOPS = 5; // Safety brake to prevent infinite runaway chats
 
-// Initialize Application
-loadGems();
-
-// --- NAVIGATION ---
-const showScreen = (id) => {
-    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active-screen'));
-    document.getElementById(id).classList.add('active-screen');
-};
-document.getElementById('goToCreateBtn').addEventListener('click', () => showScreen('screen-create'));
-document.getElementById('cancelCreateBtn').addEventListener('click', () => {
-    resetForm();
-    showScreen('screen-meeting');
+// --- 1. LEGACY FOLDER LOADING ---
+document.getElementById('folderInput').addEventListener('change', async (event) => {
+    try {
+        const files = event.target.files;
+        if (files.length === 0) return;
+        loadedFiles = Array.from(files);
+        
+        const statusDiv = document.getElementById('folderStatus');
+        statusDiv.innerText = `✅ Loaded: ${files.length} files`;
+        statusDiv.className = 'status-linked';
+        
+        await scanForGems();
+    } catch (err) {
+        console.error("File load error:", err);
+    }
 });
 
-// --- STORAGE: LOAD GEMS ---
-async function loadGems() {
+// --- 2. GEM DISCOVERY ---
+async function scanForGems() {
     const container = document.getElementById('gemList');
-    container.innerHTML = '';
-    
-    // Fetch from Chrome's internal database
-    const result = await chrome.storage.local.get("myGems");
-    const gems = result.myGems || [];
+    container.innerHTML = ''; 
+    gems = [];
 
-    if (gems.length === 0) {
-        container.innerHTML = '<p style="text-align:center; color:#666; font-size:0.9em; margin-top:20px;">No Specialists hired yet.<br>Click the button below to start.</p>';
+    for (const file of loadedFiles) {
+        if (file.name.endsWith('.txt') || file.name.endsWith('.md')) {
+            const name = file.name.split('.')[0]; 
+            gems.push({ name: name, fileObj: file });
+            
+            const div = document.createElement('div');
+            div.className = 'gem-card';
+            div.innerHTML = `
+                <label>
+                    <input type="checkbox" value="${name}" checked> 
+                    <div>
+                        <strong>${name}</strong>
+                        <span class="gem-info">${file.name}</span>
+                    </div>
+                </label>
+            `;
+            container.appendChild(div);
+        }
+    }
+}
+
+// --- 3. FILE READING ---
+function readFileContent(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = (e) => reject(e);
+        reader.readAsText(file);
+    });
+}
+
+// --- 4. THE MEETING LOOP (Recursive) ---
+document.getElementById('startMeetingBtn').addEventListener('click', async () => {
+    const selectedCheckboxes = Array.from(document.querySelectorAll('#gemList input:checked'));
+    const userTopic = document.getElementById('userInput').value;
+    
+    if (selectedCheckboxes.length === 0) return alert("Select at least one Specialist.");
+    if (!userTopic) return alert("Please provide a topic.");
+
+    await ensureGeminiTab();
+    
+    // Reset Safety Counter
+    loopCount = 0;
+    
+    // Start the Conversation Chain
+    runMeetingLoop(selectedCheckboxes, userTopic, "User");
+});
+
+async function runMeetingLoop(selectedCheckboxes, topic, lastSpeaker) {
+    if (loopCount >= MAX_LOOPS) {
+        alert("Max conversation loops reached. Stopping for safety.");
+        resetUI();
         return;
     }
-
-    gems.forEach((gem, index) => {
-        const div = document.createElement('div');
-        div.className = 'gem-card';
-        div.innerHTML = `
-            <label>
-                <input type="checkbox" value="${index}" checked> 
-                <span>${gem.name}</span>
-            </label>
-            <span class="delete-btn" data-index="${index}" title="Fire Specialist">×</span>
-        `;
-        container.appendChild(div);
-    });
-
-    // Add Delete Listeners
-    document.querySelectorAll('.delete-btn').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-            const idx = e.target.getAttribute('data-index');
-            // Confirm deletion
-            if(!confirm("Are you sure you want to remove this Specialist?")) return;
-            
-            gems.splice(idx, 1);
-            await chrome.storage.local.set({ myGems: gems });
-            loadGems();
-        });
-    });
-}
-
-// --- STORAGE: SAVE GEM ---
-// 1. Handle File Reading
-document.getElementById('hiddenFile').addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    
-    document.getElementById('fileNameDisplay').innerText = `📄 ${file.name}`;
-    
-    // Read text content immediately
-    const text = await file.text();
-    currentKnowledgeText = text;
-});
-
-// 2. Handle Save
-document.getElementById('saveGemBtn').addEventListener('click', async () => {
-    const name = document.getElementById('newGemName').value;
-    const role = document.getElementById('newGemRole').value;
-    
-    if (!name || !role) return alert("Name and Role are required.");
-
-    const newGem = {
-        name: name,
-        instruction: role,
-        knowledge: currentKnowledgeText || "" // Save the file content directly into DB
-    };
-
-    // Get existing, push new, save back
-    const result = await chrome.storage.local.get("myGems");
-    const gems = result.myGems || [];
-    gems.push(newGem);
-    
-    await chrome.storage.local.set({ myGems: gems });
-    
-    resetForm();
-    showScreen('screen-meeting');
-    loadGems();
-});
-
-function resetForm() {
-    document.getElementById('newGemName').value = "";
-    document.getElementById('newGemRole').value = "";
-    document.getElementById('hiddenFile').value = "";
-    document.getElementById('fileNameDisplay').innerText = "📂 Click to Attach File";
-    currentKnowledgeText = "";
-}
-
-// --- MEETING ORCHESTRATION ---
-document.getElementById('startMeetingBtn').addEventListener('click', async () => {
-    const selectedIndices = Array.from(document.querySelectorAll('#gemList input:checked')).map(cb => cb.value);
-    const userTopic = document.getElementById('userInput').value;
-
-    if (selectedIndices.length === 0) return alert("Select at least one Specialist.");
-    if (!userTopic) return alert("Please enter a meeting topic.");
-
-    // Load actual data
-    const result = await chrome.storage.local.get("myGems");
-    const allGems = result.myGems || [];
+    loopCount++;
 
     const btn = document.getElementById('startMeetingBtn');
-    const originalText = btn.innerText;
-    btn.innerText = "Running Meeting...";
+    btn.innerText = `🔄 Round ${loopCount}: Specialists working...`;
     btn.disabled = true;
 
     try {
-        for (const index of selectedIndices) {
-            const gem = allGems[index];
+        let currentContext = lastSpeaker;
+
+        // A. SPECIALIST PHASE
+        for (const cb of selectedCheckboxes) {
+            const gemName = cb.value;
+            const gemData = gems.find(g => g.name === gemName);
+            const knowledge = await readFileContent(gemData.fileObj);
             
+            // --- UPDATED PROMPT: SILENCE PROTOCOL ADDED HERE ---
             const prompt = `
-*** SYSTEM INSTRUCTION: NEW SPEAKER ***
-ROLE: ${gem.name}
-CORE INSTRUCTION: ${gem.instruction}
+*** ROLE: ${gemName} ***
+CONTEXT: A multi-agent meeting. The previous input was from: ${currentContext}.
+TOPIC: ${topic}
+YOUR KNOWLEDGE BASE: ${knowledge.substring(0, 5000)}
 
-KNOWLEDGE BASE:
-${gem.knowledge.substring(0, 25000)}
+TASK: Offer your expert technical input.
 
-TOPIC: ${userTopic}
-
-TASK: Provide your expert analysis.
+*** CRITICAL INSTRUCTION: NOISE REDUCTION ***
+1. IF the previous speaker has already accurately covered the topic from your domain's perspective:
+   - Respond ONLY with: "I have reviewed the conversation and concur. No additional constraints from [${gemName}]."
+2. IF you have a specific, unique addition or correction based on your Knowledge Base:
+   - Provide it concisely.
+DO NOT repeat information already stated.
             `;
 
             await injectPromptIntoGemini(prompt);
-            
-            // Wait for generation (15 seconds per turn)
-            await new Promise(r => setTimeout(r, 15000));
+            await waitForIdleState();
+            currentContext = gemName;
         }
+
+        // B. PROJECT MANAGER PHASE
+        btn.innerText = "👨‍💼 PM Synthesizing...";
+        const pmPrompt = `
+*** ROLE: Project Manager ***
+CONTEXT: Review the responses from the specialists above regarding "${topic}".
+
+TASK:
+1. Summarize the technical consensus.
+2. Ask the user (The Human) if they agree or if they have modifications.
+3. If specialists mostly concurred, note that the team is aligned.
+        `;
+        
+        await injectPromptIntoGemini(pmPrompt);
+        await waitForIdleState();
+
+        // C. LISTENING PHASE
+        btn.innerText = "👂 Listening for your reply...";
+        
+        // Wait for the USER to type a reply in the main window
+        const userReply = await waitForUserReply();
+        
+        if (userReply) {
+            // RESTART LOOP WITH NEW CONTEXT
+            console.log("User Replied: ", userReply);
+            runMeetingLoop(selectedCheckboxes, userReply, "The User (You)");
+        }
+
     } catch (error) {
         console.error(error);
-        alert("Meeting Error: " + error.message);
-    } finally {
-        btn.innerText = originalText;
-        btn.disabled = false;
+        alert("Loop Error: " + error.message);
+        resetUI();
     }
-});
+}
 
-// --- DOM INJECTION (AUTO-PILOT VERSION) ---
+function resetUI() {
+    const btn = document.getElementById('startMeetingBtn');
+    btn.innerText = "🚀 Start Team Meeting";
+    btn.disabled = false;
+}
+
+// --- 5. CORE UTILITIES ---
+
+async function ensureGeminiTab() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab.url.includes("gemini.google.com")) {
+        await chrome.tabs.create({ url: GEMINI_URL });
+        await new Promise(r => setTimeout(r, 5000));
+    }
+}
+
 async function injectPromptIntoGemini(text) {
-    // 1. Get the Active Tab
-    let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-    // 2. AUTO-ROUTING LOGIC
-    // If we are not on Gemini, find it or open it.
-    if (!tab || !tab.url || !tab.url.includes("gemini.google.com")) {
-        
-        // Check if Gemini is open in another tab
-        const geminiTabs = await chrome.tabs.query({ url: "*://gemini.google.com/*" });
-        
-        if (geminiTabs.length > 0) {
-            // Switch to existing tab
-            await chrome.tabs.update(geminiTabs[0].id, { active: true });
-            tab = geminiTabs[0];
-            // Brief pause to allow tab switch to register
-            await new Promise(r => setTimeout(r, 1000));
-        } else {
-            // Open new tab
-            const newTab = await chrome.tabs.create({ url: "https://gemini.google.com" });
-            // Wait for load (Critical for cold starts)
-            await new Promise(r => setTimeout(r, 4000)); 
-            tab = newTab;
-        }
-    }
-
-    // 3. Execute Injection on the Correct Tab
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: (msg) => {
-            // The "Puppeteer" Logic
-            const editor = document.querySelector('.ql-editor') || document.querySelector('div[contenteditable="true"]');
-            
+            const editor = document.querySelector('.ql-editor') || document.querySelector('div[contenteditable="true"]'); 
             if (editor) {
                 editor.focus();
-                // Clear existing text if any
-                document.execCommand('selectAll', false, null);
                 document.execCommand('insertText', false, msg);
-                
-                // Click Send
                 setTimeout(() => {
                     const sendBtn = document.querySelector('button[aria-label="Send message"]') || document.querySelector('button.send-button');
                     if(sendBtn) sendBtn.click();
                 }, 800);
-            } else { 
-                // Fallback if UI hasn't loaded yet
-                console.error("GeminiTeams: Chat input not found.");
-                alert("GeminiTeams: I opened the page, but the chat box isn't ready. Please wait a moment and click Start again.");
-            }
+            } else { throw new Error("Chat input not found."); }
         },
         args: [text]
     });
+}
+
+async function waitForIdleState() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+            return new Promise((resolve) => {
+                const checkInterval = setInterval(() => {
+                    const sendBtn = document.querySelector('button[aria-label="Send message"]');
+                    // Check if button is visible AND enabled
+                    const isIdle = sendBtn && !sendBtn.hasAttribute('disabled') && sendBtn.getAttribute('aria-disabled') !== 'true';
+                    if (isIdle) {
+                        clearInterval(checkInterval);
+                        resolve(true);
+                    }
+                }, 1000);
+            });
+        }
+    });
+}
+
+// --- 6. THE LISTENER ---
+async function waitForUserReply() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    // Inject a listener that waits for the DOM to change (User Message Added)
+    return await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+            return new Promise((resolve) => {
+                console.log("System: Listening for user input...");
+                
+                // 1. Snapshot current message count
+                const getMessageCount = () => document.querySelectorAll('.user-query').length || document.querySelectorAll('[data-test-id="user-query"]').length; // Google specific selectors
+                const initialCount = getMessageCount();
+
+                // 2. Poll for increase
+                const poll = setInterval(() => {
+                    const currentCount = getMessageCount();
+                    
+                    // If we have MORE user queries than before, the user just sent one!
+                    if (currentCount > initialCount) {
+                        clearInterval(poll);
+                        
+                        // Try to grab the text of the last user query
+                        const allQueries = document.querySelectorAll('.user-query'); 
+                        const lastQuery = allQueries[allQueries.length - 1]?.innerText || "User Follow-up";
+                        
+                        resolve(lastQuery);
+                    }
+                }, 1000);
+            });
+        }
+    }).then(results => results[0].result); // Get the return value from the injected script
 }

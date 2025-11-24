@@ -1,0 +1,4 @@
+{
+  "editor": ".ql-editor, div[contenteditable='true']",
+  "sendBtn": "button[aria-label='Send message'], button.send-button"
+}

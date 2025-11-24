@@ -1,144 +1,202 @@
 /* .About
     File Name:  sidepanel.js
     Author:     Kristopher Roy
-    Purpose:    Full-Duplex Manager with IndexedDB Persistence (Integrated Vault)
+    Purpose:    v2.1 - Data Portability + Enhanced PM Logic
 */
 
-// --- DATABASE CONSTANTS ---
-const DB_NAME = "GeminiTeamsDB";
-const STORE_NAME = "specialists";
-const GEMINI_URL = "https://gemini.google.com";
-
-let gems = []; 
+// --- CONFIGURATION ---
+const MAX_LOOPS = 5;
 let loopCount = 0;
-const MAX_LOOPS = 5; 
+let currentKnowledgeText = ""; 
+let globalGems = []; 
 
-// --- 1. DATABASE UTILITIES (The Vault) ---
-function openDB() {
-    return new Promise((resolve, reject) => {
-        const request = indexedDB.open(DB_NAME, 1);
-        request.onupgradeneeded = (e) => {
-            const db = e.target.result;
-            if (!db.objectStoreNames.contains(STORE_NAME)) {
-                db.createObjectStore(STORE_NAME, { keyPath: "name" });
-            }
-        };
-        request.onsuccess = (e) => resolve(e.target.result);
-        request.onerror = (e) => reject("DB Error");
-    });
-}
+// --- 1. DEFINITIONS (HOISTED) ---
 
-async function saveSpecialistToDB(name, content, filename) {
-    const db = await openDB();
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).put({ name, content, filename });
-    return new Promise(resolve => tx.oncomplete = resolve);
-}
-
-async function loadSpecialistsFromDB() {
-    const db = await openDB();
-    return new Promise(resolve => {
-        const tx = db.transaction(STORE_NAME, "readonly");
-        const request = tx.objectStore(STORE_NAME).getAll();
-        request.onsuccess = () => resolve(request.result);
-    });
-}
-
-// --- 2. STARTUP & UI ---
-// Automatically load from Vault when opened
-window.addEventListener('DOMContentLoaded', async () => {
-    await refreshUI();
-});
-
-async function refreshUI() {
-    gems = await loadSpecialistsFromDB();
-    renderGemList();
+function setupEventListeners() {
+    // A. Navigation
+    const goCreate = document.getElementById('goToCreateBtn');
+    const cancelCreate = document.getElementById('cancelCreateBtn');
     
-    const statusDiv = document.getElementById('folderStatus');
-    if (gems.length > 0) {
-        statusDiv.innerText = `✅ Storage: ${gems.length} Specialists Ready`;
-        statusDiv.className = 'status-linked';
-    } else {
-        statusDiv.innerText = `⚠️ Internal Storage Empty`;
-        statusDiv.className = 'status-missing';
+    if(goCreate) goCreate.addEventListener('click', () => showScreen('screen-create'));
+    if(cancelCreate) cancelCreate.addEventListener('click', () => {
+        resetForm();
+        showScreen('screen-meeting');
+    });
+
+    // B. File Upload (Knowledge Base)
+    const fileInput = document.getElementById('hiddenFile');
+    const uploadArea = document.getElementById('uploadClickArea');
+    
+    if (uploadArea && fileInput) {
+        uploadArea.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            document.getElementById('fileNameDisplay').innerText = `📄 ${file.name}`;
+            currentKnowledgeText = await file.text();
+        });
     }
+
+    // C. Data Controls (Import/Export)
+    const exportBtn = document.getElementById('exportBtn');
+    const importBtn = document.getElementById('importBtn');
+    const importFile = document.getElementById('importFile');
+
+    if (exportBtn) exportBtn.addEventListener('click', exportTeamData);
+    if (importBtn && importFile) {
+        importBtn.addEventListener('click', () => importFile.click());
+        importFile.addEventListener('change', importTeamData);
+    }
+
+    // D. Actions
+    const saveBtn = document.getElementById('saveGemBtn');
+    if(saveBtn) saveBtn.addEventListener('click', saveGem);
+
+    const startBtn = document.getElementById('startMeetingBtn');
+    if(startBtn) startBtn.addEventListener('click', startMeeting);
 }
 
-function renderGemList() {
+const showScreen = (id) => {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active-screen'));
+    const target = document.getElementById(id);
+    if(target) target.classList.add('active-screen');
+};
+
+function resetForm() {
+    const nameInput = document.getElementById('newGemName');
+    const roleInput = document.getElementById('newGemRole');
+    const fileInput = document.getElementById('hiddenFile');
+    const display = document.getElementById('fileNameDisplay');
+
+    if(nameInput) nameInput.value = "";
+    if(roleInput) roleInput.value = "";
+    if(fileInput) fileInput.value = "";
+    if(display) display.innerText = "📂 Click to Attach File";
+    currentKnowledgeText = "";
+}
+
+// --- DATA PORTABILITY ---
+async function exportTeamData() {
+    if (globalGems.length === 0) return alert("No specialists to export.");
+    
+    // Create JSON Blob
+    const dataStr = JSON.stringify(globalGems, null, 2);
+    const blob = new Blob([dataStr], {type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    
+    // Trigger Download
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = "gemini_team_backup.json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+async function importTeamData(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    try {
+        const text = await file.text();
+        const importedGems = JSON.parse(text);
+        
+        if (!Array.isArray(importedGems)) throw new Error("Invalid JSON format");
+
+        // Merge Strategy: Append new gems to existing list
+        if(confirm(`Found ${importedGems.length} specialists. Import them?`)) {
+            globalGems = [...globalGems, ...importedGems];
+            await chrome.storage.local.set({ myGems: globalGems });
+            loadGems();
+            alert("Team imported successfully!");
+        }
+    } catch (err) {
+        alert("Import Failed: " + err.message);
+    }
+    // Reset input so same file can be selected again if needed
+    e.target.value = ''; 
+}
+
+// --- STORAGE ---
+async function loadGems() {
     const container = document.getElementById('gemList');
+    if (!container) return;
     container.innerHTML = '';
     
-    if (gems.length === 0) {
-        container.innerHTML = '<p style="text-align:center; color:#666; font-size: 0.9em;">Load a folder to populate the Vault.</p>';
+    if (!chrome.storage || !chrome.storage.local) {
+        container.innerHTML = '<p style="color:red">Error: Storage permission missing.</p>';
         return;
     }
 
-    gems.forEach(gem => {
+    const result = await chrome.storage.local.get("myGems");
+    globalGems = result.myGems || [];
+
+    if (globalGems.length === 0) {
+        container.innerHTML = '<p style="text-align:center; color:#888; margin-top:30px; font-size: 0.9em;">No Specialists hired yet.<br>Use Import or Hire New.</p>';
+        return;
+    }
+
+    globalGems.forEach((gem, index) => {
         const div = document.createElement('div');
         div.className = 'gem-card';
         div.innerHTML = `
             <label>
-                <input type="checkbox" value="${gem.name}" checked> 
-                <div>
-                    <strong>${gem.name}</strong>
-                    <span class="gem-info">Source: ${gem.filename}</span>
-                </div>
+                <input type="checkbox" value="${index}" checked> 
+                <span>${gem.name}</span>
             </label>
+            <span class="delete-btn" data-index="${index}" title="Remove">×</span>
         `;
         container.appendChild(div);
     });
-}
 
-// --- 3. INGESTION (One-Time Load) ---
-document.getElementById('folderInput').addEventListener('change', async (event) => {
-    try {
-        const files = Array.from(event.target.files);
-        if (files.length === 0) return;
-
-        const statusDiv = document.getElementById('folderStatus');
-        statusDiv.innerText = `⏳ Ingesting ${files.length} files...`;
-
-        // Process files and save to DB
-        for (const file of files) {
-            if (file.name.endsWith('.txt') || file.name.endsWith('.md')) {
-                const content = await readFileContent(file); // Read text immediately
-                const name = file.name.split('.')[0];
-                await saveSpecialistToDB(name, content, file.name);
-            }
-        }
-        
-        await refreshUI(); // Reload from DB
-        
-    } catch (err) {
-        console.error("Ingestion error:", err);
-        alert("Error saving files: " + err.message);
-    }
-});
-
-function readFileContent(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target.result);
-        reader.onerror = (e) => reject(e);
-        reader.readAsText(file);
+    document.querySelectorAll('.delete-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            if(!confirm("Fire this Specialist?")) return;
+            const idx = e.target.getAttribute('data-index');
+            globalGems.splice(idx, 1);
+            await chrome.storage.local.set({ myGems: globalGems });
+            loadGems();
+        });
     });
 }
 
-// --- 4. THE MEETING LOOP (Recursive) ---
-document.getElementById('startMeetingBtn').addEventListener('click', async () => {
-    const selectedCheckboxes = Array.from(document.querySelectorAll('#gemList input:checked'));
+async function saveGem() {
+    const name = document.getElementById('newGemName').value;
+    const role = document.getElementById('newGemRole').value;
+    
+    if (!name || !role) return alert("Name and Instructions are required.");
+
+    const newGem = {
+        name: name,
+        instruction: role,
+        knowledge: currentKnowledgeText || ""
+    };
+
+    globalGems.push(newGem);
+    await chrome.storage.local.set({ myGems: globalGems });
+    
+    resetForm();
+    showScreen('screen-meeting');
+    loadGems();
+}
+
+// --- MEETING ENGINE ---
+async function startMeeting() {
+    const selectedIndices = Array.from(document.querySelectorAll('#gemList input:checked')).map(cb => cb.value);
     const userTopic = document.getElementById('userInput').value;
     
-    if (selectedCheckboxes.length === 0) return alert("Select at least one Specialist.");
+    if (selectedIndices.length === 0) return alert("Select at least one Specialist.");
     if (!userTopic) return alert("Please provide a topic.");
 
     await ensureGeminiTab();
     loopCount = 0;
     
-    runMeetingLoop(selectedCheckboxes, userTopic, "User");
-});
+    const selectedGems = selectedIndices.map(idx => globalGems[idx]);
+    runMeetingLoop(selectedGems, userTopic, "User");
+}
 
-async function runMeetingLoop(selectedCheckboxes, topic, lastSpeaker) {
+async function runMeetingLoop(selectedGems, topic, lastSpeaker) {
     if (loopCount >= MAX_LOOPS) {
         alert("Max conversation loops reached. Stopping for safety.");
         resetUI();
@@ -147,62 +205,60 @@ async function runMeetingLoop(selectedCheckboxes, topic, lastSpeaker) {
     loopCount++;
 
     const btn = document.getElementById('startMeetingBtn');
-    btn.innerText = `🔄 Round ${loopCount}: Specialists working...`;
-    btn.disabled = true;
+    if(btn) {
+        btn.innerText = `🔄 Round ${loopCount}: Specialists working...`;
+        btn.disabled = true;
+    }
 
     try {
         let currentContext = lastSpeaker;
 
         // A. SPECIALIST PHASE
-        for (const cb of selectedCheckboxes) {
-            const gemName = cb.value;
-            // Load content directly from Vault (gems array), NOT file object
-            const gemData = gems.find(g => g.name === gemName);
-            const knowledge = gemData.content; 
-            
+        for (const gem of selectedGems) {
             const prompt = `
-*** ROLE: ${gemName} ***
+*** ROLE: ${gem.name} ***
+CORE INSTRUCTIONS: ${gem.instruction}
 CONTEXT: A multi-agent meeting. The previous input was from: ${currentContext}.
 TOPIC: ${topic}
-YOUR KNOWLEDGE BASE: ${knowledge.substring(0, 5000)}
+YOUR KNOWLEDGE BASE: ${gem.knowledge.substring(0, 15000)}
 
-TASK: Offer your expert technical input.
+TASK: Offer your expert technical input based on your Role and Knowledge.
 
 *** CRITICAL INSTRUCTION: NOISE REDUCTION ***
 1. IF the previous speaker has already accurately covered the topic from your domain's perspective:
-   - Respond ONLY with: "I have reviewed the conversation and concur. No additional constraints from [${gemName}]."
+   - Respond ONLY with: "I have reviewed the conversation and concur. No additional constraints from [${gem.name}]."
 2. IF you have a specific, unique addition or correction based on your Knowledge Base:
    - Provide it concisely.
 DO NOT repeat information already stated.
             `;
 
             await injectPromptIntoGemini(prompt);
-            await waitForIdleState();
-            currentContext = gemName;
+            await waitForIdleState(); 
+            currentContext = gem.name;
+            await new Promise(r => setTimeout(r, 2000));
         }
 
-        // B. PROJECT MANAGER PHASE
-        btn.innerText = "👨‍💼 PM Synthesizing...";
+        // B. PM PHASE (Updated per user request)
+        if(btn) btn.innerText = "👨‍💼 PM Synthesizing...";
         const pmPrompt = `
 *** ROLE: Project Manager ***
 CONTEXT: Review the responses from the specialists above regarding "${topic}".
 
 TASK:
-1. Summarize the technical consensus.
-2. Ask the user (The Human) if they agree or if they have modifications.
-3. If specialists mostly concurred, note that the team is aligned.
+1. Summarize the technical consensus so far.
+2. CRITICAL: Explicitly ask the user if they would like additional feedback from any specific specialists, or if they are ready to proceed.
         `;
-        
         await injectPromptIntoGemini(pmPrompt);
         await waitForIdleState();
 
         // C. LISTENING PHASE
-        btn.innerText = "👂 Listening for your reply...";
+        if(btn) btn.innerText = "👂 Listening for your reply...";
         const userReply = await waitForUserReply();
         
         if (userReply) {
-            console.log("User Replied: ", userReply);
-            runMeetingLoop(selectedCheckboxes, userReply, "The User (You)");
+            runMeetingLoop(selectedGems, userReply, "The User (You)");
+        } else {
+             resetUI();
         }
 
     } catch (error) {
@@ -214,17 +270,31 @@ TASK:
 
 function resetUI() {
     const btn = document.getElementById('startMeetingBtn');
-    btn.innerText = "🚀 Start Team Meeting";
-    btn.disabled = false;
+    if(btn) {
+        btn.innerText = "🚀 Start Team Meeting";
+        btn.disabled = false;
+    }
 }
 
-// --- 5. CORE UTILITIES ---
+// --- UTILS (Selectors Hardcoded for Stability Fallback) ---
+const SELECTORS = {
+    editor: '.ql-editor, div[contenteditable="true"]',
+    sendBtn: 'button[aria-label="Send message"], button.send-button'
+};
 
 async function ensureGeminiTab() {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab.url.includes("gemini.google.com")) {
-        await chrome.tabs.create({ url: GEMINI_URL });
-        await new Promise(r => setTimeout(r, 5000));
+    let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.url || !tab.url.includes("gemini.google.com")) {
+        const geminiTabs = await chrome.tabs.query({ url: "*://gemini.google.com/*" });
+        if (geminiTabs.length > 0) {
+            await chrome.tabs.update(geminiTabs[0].id, { active: true });
+            tab = geminiTabs[0];
+            await new Promise(r => setTimeout(r, 1000));
+        } else {
+            const newTab = await chrome.tabs.create({ url: "https://gemini.google.com" });
+            await new Promise(r => setTimeout(r, 4000)); 
+            tab = newTab;
+        }
     }
 }
 
@@ -232,18 +302,21 @@ async function injectPromptIntoGemini(text) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: (msg) => {
-            const editor = document.querySelector('.ql-editor') || document.querySelector('div[contenteditable="true"]'); 
+        func: (msg, sel) => {
+            const editor = document.querySelector(sel.editor); 
             if (editor) {
                 editor.focus();
+                document.execCommand('selectAll', false, null);
                 document.execCommand('insertText', false, msg);
                 setTimeout(() => {
-                    const sendBtn = document.querySelector('button[aria-label="Send message"]') || document.querySelector('button.send-button');
+                    const sendBtn = document.querySelector(sel.sendBtn);
                     if(sendBtn) sendBtn.click();
                 }, 800);
-            } else { throw new Error("Chat input not found."); }
+            } else { 
+                console.error("GeminiTeams: Chat input not found.");
+            }
         },
-        args: [text]
+        args: [text, SELECTORS]
     });
 }
 
@@ -251,10 +324,10 @@ async function waitForIdleState() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: () => {
+        func: (sel) => {
             return new Promise((resolve) => {
                 const checkInterval = setInterval(() => {
-                    const sendBtn = document.querySelector('button[aria-label="Send message"]');
+                    const sendBtn = document.querySelector(sel.sendBtn);
                     const isIdle = sendBtn && !sendBtn.hasAttribute('disabled') && sendBtn.getAttribute('aria-disabled') !== 'true';
                     if (isIdle) {
                         clearInterval(checkInterval);
@@ -262,18 +335,17 @@ async function waitForIdleState() {
                     }
                 }, 1000);
             });
-        }
+        },
+        args: [SELECTORS]
     });
 }
 
-// --- 6. THE LISTENER ---
 async function waitForUserReply() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     return await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
             return new Promise((resolve) => {
-                console.log("System: Listening for user input...");
                 const getMessageCount = () => document.querySelectorAll('.user-query').length || document.querySelectorAll('[data-test-id="user-query"]').length;
                 const initialCount = getMessageCount();
 
@@ -290,3 +362,14 @@ async function waitForUserReply() {
         }
     }).then(results => results[0].result);
 }
+
+// --- 2. EXECUTION ---
+window.addEventListener('load', () => {
+    try {
+        console.log("GeminiTeams: UI Loaded.");
+        loadGems();
+        setupEventListeners();
+    } catch (e) {
+        console.error("GeminiTeams Init Error:", e);
+    }
+});

@@ -1,60 +1,120 @@
 /* .About
     File Name:  sidepanel.js
     Author:     Kristopher Roy
-    Purpose:    Full-Duplex Conversational Manager with Auto-Looping & Noise Reduction
+    Purpose:    Full-Duplex Manager with IndexedDB Persistence (Integrated Vault)
 */
 
-let loadedFiles = [];
-let gems = [];
+// --- DATABASE CONSTANTS ---
+const DB_NAME = "GeminiTeamsDB";
+const STORE_NAME = "specialists";
 const GEMINI_URL = "https://gemini.google.com";
-let loopCount = 0;
-const MAX_LOOPS = 5; // Safety brake to prevent infinite runaway chats
 
-// --- 1. LEGACY FOLDER LOADING ---
-document.getElementById('folderInput').addEventListener('change', async (event) => {
-    try {
-        const files = event.target.files;
-        if (files.length === 0) return;
-        loadedFiles = Array.from(files);
-        
-        const statusDiv = document.getElementById('folderStatus');
-        statusDiv.innerText = `✅ Loaded: ${files.length} files`;
-        statusDiv.className = 'status-linked';
-        
-        await scanForGems();
-    } catch (err) {
-        console.error("File load error:", err);
-    }
+let gems = []; 
+let loopCount = 0;
+const MAX_LOOPS = 5; 
+
+// --- 1. DATABASE UTILITIES (The Vault) ---
+function openDB() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, 1);
+        request.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+                db.createObjectStore(STORE_NAME, { keyPath: "name" });
+            }
+        };
+        request.onsuccess = (e) => resolve(e.target.result);
+        request.onerror = (e) => reject("DB Error");
+    });
+}
+
+async function saveSpecialistToDB(name, content, filename) {
+    const db = await openDB();
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).put({ name, content, filename });
+    return new Promise(resolve => tx.oncomplete = resolve);
+}
+
+async function loadSpecialistsFromDB() {
+    const db = await openDB();
+    return new Promise(resolve => {
+        const tx = db.transaction(STORE_NAME, "readonly");
+        const request = tx.objectStore(STORE_NAME).getAll();
+        request.onsuccess = () => resolve(request.result);
+    });
+}
+
+// --- 2. STARTUP & UI ---
+// Automatically load from Vault when opened
+window.addEventListener('DOMContentLoaded', async () => {
+    await refreshUI();
 });
 
-// --- 2. GEM DISCOVERY ---
-async function scanForGems() {
-    const container = document.getElementById('gemList');
-    container.innerHTML = ''; 
-    gems = [];
-
-    for (const file of loadedFiles) {
-        if (file.name.endsWith('.txt') || file.name.endsWith('.md')) {
-            const name = file.name.split('.')[0]; 
-            gems.push({ name: name, fileObj: file });
-            
-            const div = document.createElement('div');
-            div.className = 'gem-card';
-            div.innerHTML = `
-                <label>
-                    <input type="checkbox" value="${name}" checked> 
-                    <div>
-                        <strong>${name}</strong>
-                        <span class="gem-info">${file.name}</span>
-                    </div>
-                </label>
-            `;
-            container.appendChild(div);
-        }
+async function refreshUI() {
+    gems = await loadSpecialistsFromDB();
+    renderGemList();
+    
+    const statusDiv = document.getElementById('folderStatus');
+    if (gems.length > 0) {
+        statusDiv.innerText = `✅ Storage: ${gems.length} Specialists Ready`;
+        statusDiv.className = 'status-linked';
+    } else {
+        statusDiv.innerText = `⚠️ Internal Storage Empty`;
+        statusDiv.className = 'status-missing';
     }
 }
 
-// --- 3. FILE READING ---
+function renderGemList() {
+    const container = document.getElementById('gemList');
+    container.innerHTML = '';
+    
+    if (gems.length === 0) {
+        container.innerHTML = '<p style="text-align:center; color:#666; font-size: 0.9em;">Load a folder to populate the Vault.</p>';
+        return;
+    }
+
+    gems.forEach(gem => {
+        const div = document.createElement('div');
+        div.className = 'gem-card';
+        div.innerHTML = `
+            <label>
+                <input type="checkbox" value="${gem.name}" checked> 
+                <div>
+                    <strong>${gem.name}</strong>
+                    <span class="gem-info">Source: ${gem.filename}</span>
+                </div>
+            </label>
+        `;
+        container.appendChild(div);
+    });
+}
+
+// --- 3. INGESTION (One-Time Load) ---
+document.getElementById('folderInput').addEventListener('change', async (event) => {
+    try {
+        const files = Array.from(event.target.files);
+        if (files.length === 0) return;
+
+        const statusDiv = document.getElementById('folderStatus');
+        statusDiv.innerText = `⏳ Ingesting ${files.length} files...`;
+
+        // Process files and save to DB
+        for (const file of files) {
+            if (file.name.endsWith('.txt') || file.name.endsWith('.md')) {
+                const content = await readFileContent(file); // Read text immediately
+                const name = file.name.split('.')[0];
+                await saveSpecialistToDB(name, content, file.name);
+            }
+        }
+        
+        await refreshUI(); // Reload from DB
+        
+    } catch (err) {
+        console.error("Ingestion error:", err);
+        alert("Error saving files: " + err.message);
+    }
+});
+
 function readFileContent(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -73,11 +133,8 @@ document.getElementById('startMeetingBtn').addEventListener('click', async () =>
     if (!userTopic) return alert("Please provide a topic.");
 
     await ensureGeminiTab();
-    
-    // Reset Safety Counter
     loopCount = 0;
     
-    // Start the Conversation Chain
     runMeetingLoop(selectedCheckboxes, userTopic, "User");
 });
 
@@ -99,10 +156,10 @@ async function runMeetingLoop(selectedCheckboxes, topic, lastSpeaker) {
         // A. SPECIALIST PHASE
         for (const cb of selectedCheckboxes) {
             const gemName = cb.value;
+            // Load content directly from Vault (gems array), NOT file object
             const gemData = gems.find(g => g.name === gemName);
-            const knowledge = await readFileContent(gemData.fileObj);
+            const knowledge = gemData.content; 
             
-            // --- UPDATED PROMPT: SILENCE PROTOCOL ADDED HERE ---
             const prompt = `
 *** ROLE: ${gemName} ***
 CONTEXT: A multi-agent meeting. The previous input was from: ${currentContext}.
@@ -141,12 +198,9 @@ TASK:
 
         // C. LISTENING PHASE
         btn.innerText = "👂 Listening for your reply...";
-        
-        // Wait for the USER to type a reply in the main window
         const userReply = await waitForUserReply();
         
         if (userReply) {
-            // RESTART LOOP WITH NEW CONTEXT
             console.log("User Replied: ", userReply);
             runMeetingLoop(selectedCheckboxes, userReply, "The User (You)");
         }
@@ -201,7 +255,6 @@ async function waitForIdleState() {
             return new Promise((resolve) => {
                 const checkInterval = setInterval(() => {
                     const sendBtn = document.querySelector('button[aria-label="Send message"]');
-                    // Check if button is visible AND enabled
                     const isIdle = sendBtn && !sendBtn.hasAttribute('disabled') && sendBtn.getAttribute('aria-disabled') !== 'true';
                     if (isIdle) {
                         clearInterval(checkInterval);
@@ -216,34 +269,24 @@ async function waitForIdleState() {
 // --- 6. THE LISTENER ---
 async function waitForUserReply() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-    // Inject a listener that waits for the DOM to change (User Message Added)
     return await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
             return new Promise((resolve) => {
                 console.log("System: Listening for user input...");
-                
-                // 1. Snapshot current message count
-                const getMessageCount = () => document.querySelectorAll('.user-query').length || document.querySelectorAll('[data-test-id="user-query"]').length; // Google specific selectors
+                const getMessageCount = () => document.querySelectorAll('.user-query').length || document.querySelectorAll('[data-test-id="user-query"]').length;
                 const initialCount = getMessageCount();
 
-                // 2. Poll for increase
                 const poll = setInterval(() => {
                     const currentCount = getMessageCount();
-                    
-                    // If we have MORE user queries than before, the user just sent one!
                     if (currentCount > initialCount) {
                         clearInterval(poll);
-                        
-                        // Try to grab the text of the last user query
                         const allQueries = document.querySelectorAll('.user-query'); 
                         const lastQuery = allQueries[allQueries.length - 1]?.innerText || "User Follow-up";
-                        
                         resolve(lastQuery);
                     }
                 }, 1000);
             });
         }
-    }).then(results => results[0].result); // Get the return value from the injected script
+    }).then(results => results[0].result);
 }

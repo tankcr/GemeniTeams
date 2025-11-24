@@ -1,7 +1,7 @@
 /* .About
     File Name:  sidepanel.js
     Author:     Kristopher Roy
-    Purpose:    v2.4 - Remote Config + Dynamic Squad Protocol (Garage Ready)
+    Purpose:    v2.5 - Dynamic Squad Protocol + Role Specific Overrides (The "Yes, And" Patch)
 */
 
 // --- CONFIGURATION ---
@@ -184,7 +184,7 @@ async function saveGem() {
     loadGems();
 }
 
-// --- 3. MEETING ENGINE (SQUAD AWARE) ---
+// --- 3. MEETING ENGINE (SQUAD AWARE + ROLE OVERRIDES) ---
 async function startMeeting() {
     const selectedIndices = Array.from(document.querySelectorAll('#gemList input:checked')).map(cb => cb.value);
     const topicEl = document.getElementById('userInput');
@@ -193,19 +193,19 @@ async function startMeeting() {
     if (!topicEl || !topicEl.value) return alert("Please provide a topic.");
 
     await ensureGeminiTab();
+    await updateHUD("Initializing Team...", "#333");
+
     loopCount = 0;
-    
     const selectedGems = selectedIndices.map(idx => globalGems[idx]);
     
-    // *** GENERATE SQUAD LIST FOR PROTOCOL ***
+    // Create Squad Context
     const squadNames = selectedGems.map(g => g.name).join(", ");
-    
     runMeetingLoop(selectedGems, topicEl.value, "User", squadNames);
 }
 
 async function runMeetingLoop(selectedGems, topic, lastSpeaker, squadNames) {
     if (loopCount >= MAX_LOOPS) {
-        alert("Max conversation loops reached.");
+        await updateHUD("Max Loops Reached.", "#dc3545");
         resetUI();
         return;
     }
@@ -220,7 +220,9 @@ async function runMeetingLoop(selectedGems, topic, lastSpeaker, squadNames) {
         // A. SPECIALIST PHASE
         for (const gem of selectedGems) {
             
-            // *** THE DYNAMIC HIERARCHY PROTOCOL ***
+            await updateHUD(`${gem.name} is thinking...`, "#0078d4");
+
+            // *** DYNAMIC HIERARCHY PROTOCOL + ROLE OVERRIDES ***
             const prompt = `
 *** ROLE: ${gem.name} ***
 CORE INSTRUCTIONS: ${gem.instruction}
@@ -231,10 +233,12 @@ CURRENT TOPIC: "${topic}"
 
 RULES OF ENGAGEMENT:
 1. IDENTIFY THE EXPERT: Look at the 'Active Team' list and the 'Current Topic'.
-2. SELF-ASSESSMENT: Are you the specialist most qualified to *execute* the physical or technical work for this specific topic?
-   - IF YES: You are the Authority. Provide the concrete plan, code, or blueprint.
-   - IF NO (and the Authority is present): You must DEFER execution details to them. Limit your output to suggestions from your specific domain (e.g., "I suggest X for safety, but I defer to the [Authority Name] for the structural build.")
-3. NO HALLUCINATIONS: Do not generate code/blueprints if you are a strategic/creative role.
+2. SELF-ASSESSMENT: Are you the execution authority?
+   - IF YES: Provide concrete plan/code.
+   - IF NO: Defer execution details to the Authority.
+3. ROLE SPECIFIC OVERRIDES (The "Yes, And" Rule):
+   - **Creative/Designers:** If the topic is technical (e.g., scraping, databases), DO NOT discuss the backend. Instead, ask: "How will we visualize this?" or "What is the user experience?" Pivot to Dashboards, UI, or UX immediately.
+   - **Architects:** Focus on Risk, Scope, and Integration. Do not debug code unless it breaks architecture.
 
 CONTEXT: Previous input from: ${currentContext}.
 YOUR KNOWLEDGE BASE: ${gem.knowledge.substring(0, 15000)}
@@ -249,6 +253,7 @@ TASK: Offer your expert input adhering to the PROTOCOL above.
         }
 
         // B. PM PHASE
+        await updateHUD("Project Manager Synthesizing...", "#28a745");
         if(btn) btn.innerText = "👨‍💼 PM Synthesizing...";
         
         const pmPrompt = `
@@ -260,19 +265,20 @@ TASK: Summarize consensus and ask User if they want more feedback from specific 
         await waitForIdleState();
 
         // C. LISTENING PHASE
-        if(btn) btn.innerText = "👂 Listening for your reply...";
-        const userReply = await waitForUserReply();
+        await updateHUD("Waiting for User Reply...", "#666");
+        if(btn) btn.innerText = "👂 Listening...";
         
+        const userReply = await waitForUserReply();
         if (userReply) {
-            // Pass squadNames recursively to keep protocol active
             runMeetingLoop(selectedGems, userReply, "The User (You)", squadNames);
         } else {
+             await removeHUD(); 
              resetUI();
         }
 
     } catch (error) {
         console.error(error);
-        alert("Loop Error: " + error.message);
+        await updateHUD("Error: " + error.message, "red");
         resetUI();
     }
 }
@@ -282,7 +288,7 @@ function resetUI() {
     if(btn) { btn.innerText = "🚀 Start Team Meeting"; btn.disabled = false; }
 }
 
-// --- UTILS ---
+// --- UTILS & VISUAL INJECTION ---
 
 async function ensureGeminiTab() {
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -290,14 +296,49 @@ async function ensureGeminiTab() {
         const geminiTabs = await chrome.tabs.query({ url: "*://gemini.google.com/*" });
         if (geminiTabs.length > 0) {
             await chrome.tabs.update(geminiTabs[0].id, { active: true });
-            tab = geminiTabs[0];
-            await new Promise(r => setTimeout(r, 1000));
         } else {
-            const newTab = await chrome.tabs.create({ url: "https://gemini.google.com" });
-            await new Promise(r => setTimeout(r, 4000)); 
-            tab = newTab;
+            await chrome.tabs.create({ url: "https://gemini.google.com" });
         }
+        await new Promise(r => setTimeout(r, 2000));
     }
+}
+
+async function updateHUD(text, color) {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: (statusText, statusColor) => {
+            let hud = document.getElementById('gemini-teams-hud');
+            if (!hud) {
+                hud = document.createElement('div');
+                hud.id = 'gemini-teams-hud';
+                Object.assign(hud.style, {
+                    position: 'fixed', top: '20px', right: '20px', padding: '12px 20px',
+                    background: 'rgba(255, 255, 255, 0.9)', backdropFilter: 'blur(10px)',
+                    borderRadius: '12px', boxShadow: '0 4px 15px rgba(0,0,0,0.1)',
+                    borderLeft: '5px solid #333', zIndex: '9999',
+                    fontFamily: 'Segoe UI, sans-serif', fontSize: '14px', fontWeight: '600',
+                    color: '#333', transition: 'all 0.3s ease', opacity: '0', transform: 'translateY(-10px)'
+                });
+                document.body.appendChild(hud);
+                requestAnimationFrame(() => { hud.style.opacity = '1'; hud.style.transform = 'translateY(0)'; });
+            }
+            hud.style.borderLeftColor = statusColor;
+            hud.innerText = statusText;
+        },
+        args: [text, color]
+    });
+}
+
+async function removeHUD() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+            const hud = document.getElementById('gemini-teams-hud');
+            if (hud) { hud.style.opacity = '0'; setTimeout(() => hud.remove(), 500); }
+        }
+    });
 }
 
 async function injectPromptIntoGemini(text) {

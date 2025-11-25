@@ -1,31 +1,50 @@
 /* .About
     File Name:  sidepanel.js
     Author:     Kristopher Roy (Modified by Lead Developer)
-    Purpose:    v4.1 - INTEGRATED FINAL FIXES (R2/R3/R5/R6). 
-                Automated restart via Message Passing. Stable Idle State detection.
+    Purpose:    v4.3 - INTEGRATED FINAL FIXES (R2/R3/R5/R6/R7). 
+                R6 FIX: Added 'userQueryBubble' selector for stable watcher.
 */
 
 // --- CONFIGURATION ---
 const MAX_LOOPS = 5;
+const FALLBACK_TIMEOUT_MS = 300000; // 5 minutes (R7 Fallback)
 
 let loopCount = 0;
 let stopSignal = false;
 let currentKnowledgeText = "";
 let globalGems = [];
+let fallbackTimerId = null; // R7: Global timer ID for clean-up
 
-// ✅ R3 FIX: STATIC LOCAL SELECTORS (Replaced external config loading)
+// ✅ R6 FIX: Added userQueryBubble selector for stable watcher
 let SELECTORS = {
     editor: '.ql-editor, div[contenteditable="true"]',
-    sendBtn: 'button[aria-label="Send message"], button.send-button'
+    sendBtn: 'button[aria-label="Send message"], button.send-button',
+    userQueryBubble: 'div[data-testid="user-query"], .user-query' // FIX: Selector for the SENT user message element
 };
 
 // ========================================================================
-// R6: HANDLER FOR AUTOMATED RESTART
+// R6/R7: HANDLERS FOR AUTOMATED RESTART & FALLBACK
 // ========================================================================
 
+// R7: Function to start the 5-minute timer
+function startFallbackTimer() {
+    clearTimeout(fallbackTimerId);
+    fallbackTimerId = setTimeout(() => {
+        const currentTopic = document.getElementById('userInput')?.value;
+        if (currentTopic && !stopSignal) {
+            console.warn("R7 Fallback: Content Script signal failed. Restarting loop automatically.");
+            updateHUD("R7 Fallback: Restarting meeting after timeout...", "orange");
+            // R6 restart handler logic
+            startMeeting(currentTopic, true); 
+        }
+    }, FALLBACK_TIMEOUT_MS);
+}
+
+// R6: Handler for automated restart signal from content.js
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'USER_REPLY_SENT') {
-        // Find the current topic/reply from the input field
+        clearTimeout(fallbackTimerId); // ✅ R7 Clean-up on SUCCESS
+        
         const newTopic = document.getElementById('userInput')?.value;
         if (newTopic) {
             // Restart the meeting loop with the new input. isContinuation=true
@@ -72,6 +91,7 @@ function resetForm() {
 
 function resetConversation() {
     stopSignal = true;
+    clearTimeout(fallbackTimerId); // ✅ R7 Clean-up on MANUAL STOP
     setTheme('#0078d4');
     removeHUD();
     resetUI();
@@ -501,7 +521,6 @@ async function startMeeting(newTopic = null, isContinuation = false) {
 // --------------------------------------------------------------------------------------
 
 async function runMeetingLoop(selectedGems, topic, lastSpeaker, squadNames) {
-    // R6 FIX: Removed MAX_LOOPS check to align with user's request (but still dangerous)
     if (stopSignal) {
         setTheme("#dc3545");
         await updateHUD("Meeting stopped by user.", "#dc3545");
@@ -561,21 +580,28 @@ Summarize team positions on "${topic}". Ask user if they want more input.
 
         await waitForIdleState();
 
-        // ✅ R6 FIX: PAUSE AND START MONITORING FOR AUTOMATED RESTART
+        // ✅ R6/R7: PAUSE AND START MONITORING FOR AUTOMATED RESTART OR FALLBACK
         setTheme("#666");
         await updateHUD("Meeting Paused: Waiting for user input...", "#666");
+
+        // R7: Start the Fallback Timer
+        startFallbackTimer(); 
 
         // Send message to content.js to begin monitoring for the user's next message
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         
+        // R6 FIX: Passing the correct selector for the SENT user message
         await chrome.tabs.sendMessage(tab.id, { 
             action: 'START_MONITORING', 
-            userQuerySelector: SELECTORS.editor
+            userQuerySelector: SELECTORS.userQueryBubble 
         });
 
-        // The meeting thread now exits and waits for the message listener (in global scope) to fire.
+        // The meeting thread now exits and waits for the message listener to fire.
 
     } catch (err) {
+        // R7 CLEANUP: Ensure timer is cleared on error
+        clearTimeout(fallbackTimerId); 
+
         console.error(err);
         if (!stopSignal) {
             updateHUD("Fatal Error — Check Console", "red");

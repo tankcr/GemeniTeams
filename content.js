@@ -1,7 +1,5 @@
+// File: content.js (Updated)
 // Content script to monitor for user replies and signal the side panel
-
-// NOTE: The Content Script environment does not have access to SELECTORS from the side panel.
-// We only watch for the specific message sent from the side panel to start monitoring.
 
 let observer = null;
 let initialQueryCount = 0;
@@ -10,21 +8,23 @@ let initialQueryCount = 0;
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'START_MONITORING') {
         startUserReplyMonitor(request.userQuerySelector);
+        // The side panel expects a response, even if we start async work
         sendResponse({ status: 'Monitoring started' });
         return true; 
     }
     return false;
 });
 
-function startUserReplyMonitor(querySelector) {
+function startUserReplyMonitor(userQuerySelector) { // Renamed argument for clarity
     // Stop any existing observer
     if (observer) {
         observer.disconnect();
         observer = null;
     }
 
+    // FIX: Using the correct selector for the SENT user message bubble
     const getUserQueries = () =>
-        document.querySelectorAll(querySelector);
+        document.querySelectorAll(userQuerySelector);
     
     // Set the baseline count of user messages currently on the screen
     initialQueryCount = getUserQueries().length;

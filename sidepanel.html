@@ -54,6 +54,7 @@
     .btn-outline { background: white; border: 2px solid #0078d4; color: #0078d4; margin-bottom: 10px; }
     .btn-outline:hover { background: #f0f8ff; }
     
+    /* FINAL DATA TOOLBAR */
     .data-toolbar { display: flex; gap: 10px; margin-bottom: 15px; }
     .btn-small { flex: 1; padding: 6px; font-size: 0.8em; background: #e9ecef; border: 1px solid #ced4da; cursor: pointer; }
 
@@ -70,8 +71,8 @@
     
     <div class="container">
       <div class="data-toolbar">
-        <button id="importBtn" class="btn-small">⬇️ Import</button>
-        <button id="exportBtn" class="btn-small">⬆️ Export</button>
+        <label for="importFile" class="btn btn-small">⬇️ Import Team</label>
+        <button id="exportBtn" class="btn btn-small">⬆️ Export Team</button>
       </div>
       <input type="file" id="importFile" style="display:none" accept=".json">
 

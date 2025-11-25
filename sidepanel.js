@@ -1,21 +1,45 @@
 /* .About
     File Name:  sidepanel.js
-    Author:     Kristopher Roy
-    Purpose:    v3.6 - FINAL VISUAL ALIGNMENT FIX (Complete Logic Set)
+    Author:     Kristopher Roy (Modified by Lead Developer)
+    Purpose:    v4.1 - INTEGRATED FINAL FIXES (R2/R3/R5/R6). 
+                Automated restart via Message Passing. Stable Idle State detection.
 */
 
 // --- CONFIGURATION ---
 const MAX_LOOPS = 5;
-const GITHUB_CONFIG_URL = "https://raw.githubusercontent.com/tankcr/GemeniTeams/refs/heads/main/selectors.json"; 
 
 let loopCount = 0;
 let stopSignal = false;
-let currentKnowledgeText = ""; 
-let globalGems = []; 
-let SELECTORS = { editor: '.ql-editor, div[contenteditable="true"]', sendBtn: 'button[aria-label="Send message"]' };
+let currentKnowledgeText = "";
+let globalGems = [];
+
+// ✅ R3 FIX: STATIC LOCAL SELECTORS (Replaced external config loading)
+let SELECTORS = {
+    editor: '.ql-editor, div[contenteditable="true"]',
+    sendBtn: 'button[aria-label="Send message"], button.send-button'
+};
 
 // ========================================================================
-// 1. UTILITY & VISUAL FUNCTIONS (Independent Helpers)
+// R6: HANDLER FOR AUTOMATED RESTART
+// ========================================================================
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'USER_REPLY_SENT') {
+        // Find the current topic/reply from the input field
+        const newTopic = document.getElementById('userInput')?.value;
+        if (newTopic) {
+            // Restart the meeting loop with the new input. isContinuation=true
+            startMeeting(newTopic, true); 
+        } else {
+            console.error("R6 Error: Could not get topic for automated restart.");
+            resetUI();
+        }
+    }
+});
+
+
+// ========================================================================
+// 1. UTILITY & VISUAL FUNCTIONS
 // ========================================================================
 
 function setTheme(color) {
@@ -25,56 +49,79 @@ function setTheme(color) {
 }
 
 function showScreen(id) {
-    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active-screen'));
+    document.querySelectorAll('.screen')
+        .forEach(s => s.classList.remove('active-screen'));
+
     const target = document.getElementById(id);
-    if(target) target.classList.add('active-screen');
+    if (target) target.classList.add('active-screen');
 }
 
 function resetForm() {
-    const nameInput = document.getElementById('newGemName');
-    const roleInput = document.getElementById('newGemRole');
-    const fileInput = document.getElementById('hiddenFile');
+    const name = document.getElementById('newGemName');
+    const role = document.getElementById('newGemRole');
+    const file = document.getElementById('hiddenFile');
     const display = document.getElementById('fileNameDisplay');
-    if(nameInput) nameInput.value = "";
-    if(roleInput) roleInput.value = "";
-    if(fileInput) fileInput.value = "";
-    if(display) display.innerText = "📂 Click to Attach File";
+
+    if (name) name.value = "";
+    if (role) role.value = "";
+    if (file) file.value = "";
+    if (display) display.innerText = "📂 Click to Attach File";
+
     currentKnowledgeText = "";
 }
 
 function resetConversation() {
     stopSignal = true;
-    setTheme('#0078d4'); 
+    setTheme('#0078d4');
     removeHUD();
     resetUI();
 }
 
 function resetUI() {
-    document.getElementById('startMeetingBtn').disabled = false;
-    document.getElementById('resetBtn').style.display = 'none';
-    setTheme('#0078d4'); 
+    const start = document.getElementById('startMeetingBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    if (start) {
+        start.disabled = false;
+        start.innerText = '🚀 Start';
+    }
+    if (resetBtn) resetBtn.style.display = 'none';
+    setTheme('#0078d4');
     removeHUD();
 }
 
-// --- VISUAL & COMMUNICATION UTILS ---
+// ========================================================================
+// HUD / VISUAL FEEDBACK
+// ========================================================================
 
 async function updateHUD(text, color) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
     await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: (t, c) => {
+        func: (msg, clr) => {
             let h = document.getElementById('gemini-hud');
             if (!h) {
-                h = document.createElement('div'); h.id = 'gemini-hud';
+                h = document.createElement('div');
+                h.id = 'gemini-hud';
                 Object.assign(h.style, {
-                    position:'fixed', top:'20px', right:'20px', padding:'10px 20px',
-                    background:'rgba(255,255,255,0.95)', borderLeft:'5px solid #333',
-                    borderRadius:'8px', boxShadow:'0 4px 12px rgba(0,0,0,0.15)',
-                    zIndex:'99999', fontFamily:'sans-serif', fontSize:'14px', fontWeight:'bold'
+                    position: 'fixed',
+                    top: '20px',
+                    right: '20px',
+                    padding: '10px 20px',
+                    background: 'rgba(255,255,255,0.95)',
+                    borderLeft: '5px solid #333',
+                    borderRadius: '8px',
+                    fontFamily: 'sans-serif',
+                    fontSize: '14px',
+                    fontWeight: 'bold',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                    zIndex: '99999'
                 });
                 document.body.appendChild(h);
             }
-            h.style.borderLeftColor = c; h.innerText = t; h.style.display = 'block';
+            h.style.borderLeftColor = clr;
+            h.innerText = msg;
+            h.style.display = 'block';
         },
         args: [text, color]
     });
@@ -82,375 +129,574 @@ async function updateHUD(text, color) {
 
 async function removeHUD() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
     await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: () => { const h = document.getElementById('gemini-hud'); if(h) h.style.display='none'; }
+        func: () => {
+            const h = document.getElementById('gemini-hud');
+            if (h) h.style.display = 'none';
+        }
     });
 }
 
 // ========================================================================
-// 2. DATA & CONFIG OPS
+// 2. IMPORT / EXPORT / STORAGE
 // ========================================================================
 
-async function fetchRemoteConfig() {
-    try {
-        const response = await fetch(GITHUB_CONFIG_URL, { cache: "no-store" });
-        if (!response.ok) throw new Error("Network response was not ok");
-        const remoteSelectors = await response.json();
-        
-        if (remoteSelectors.editor && remoteSelectors.sendBtn) {
-            SELECTORS = remoteSelectors;
-        }
-    } catch (error) { console.warn(`GeminiTeams: Using Fallback Config (${error.message}).`); }
+async function exportTeamData() {
+    if (globalGems.length === 0) return console.warn("No specialists to export.");
+
+    const blob = new Blob([JSON.stringify(globalGems, null, 2)], {
+        type: "application/json"
+    });
+
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = "gemini_team_backup.json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
 }
 
-async function exportTeamData() {
-    if (globalGems.length === 0) return console.warn("GeminiTeams: No specialists to export.");
-    const dataStr = JSON.stringify(globalGems, null, 2);
-    const blob = new Blob([dataStr], {type: "application/json"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = "gemini_team_backup.json";
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+// --------------------------------------------------------------------------------------
+// Import Modal (non-blocking confirm)
+// --------------------------------------------------------------------------------------
+
+function showImportModal(count) {
+    return new Promise(resolve => {
+        const old = document.getElementById("gt-import-modal");
+        if (old) old.remove();
+
+        const modal = document.createElement("div");
+        modal.id = "gt-import-modal";
+        Object.assign(modal.style, {
+            position: "fixed",
+            inset: "0",
+            background: "rgba(0,0,0,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 999999
+        });
+
+        const box = document.createElement("div");
+        Object.assign(box.style, {
+            width: "420px",
+            background: "#fff",
+            padding: "20px",
+            borderRadius: "10px",
+            fontFamily: "sans-serif",
+            boxShadow: "0 12px 30px rgba(0,0,0,0.25)"
+        });
+
+        box.innerHTML = `
+            <h3 style="margin:0 0 10px 0;">Import ${count} Specialists</h3>
+            <p style="margin-bottom:15px; color:#333">
+                Would you like to append them or replace your current team?
+            </p>
+        `;
+
+        const row = document.createElement("div");
+        row.style.display = "flex";
+        row.style.justifyContent = "flex-end";
+        row.style.gap = "10px";
+
+        const mkBtn = (label, bg, val) => {
+            const b = document.createElement("button");
+            b.innerText = label;
+            Object.assign(b.style, {
+                padding: "8px 12px",
+                borderRadius: "6px",
+                border: "none",
+                cursor: "pointer",
+                background: bg,
+                color: bg === "#fff" ? "#333" : "#fff"
+            });
+            b.onclick = () => {
+                modal.remove();
+                resolve(val);
+            };
+            return b;
+        };
+
+        row.appendChild(mkBtn("Cancel", "#fff", "cancel"));
+        row.appendChild(mkBtn("Append", "#0078d4", "append"));
+        row.appendChild(mkBtn("Replace", "#28a745", "replace"));
+
+        box.appendChild(row);
+        modal.appendChild(box);
+        document.body.appendChild(modal);
+    });
 }
+
+// --------------------------------------------------------------------------------------
+// FIXED + CLEAN IMPORT LOGIC
+// --------------------------------------------------------------------------------------
 
 async function importTeamData(e) {
-    const file = e.target.files[0];
+    const file = e?.target?.files?.[0];
     if (!file) return;
-    try {
-        const text = await file.text();
-        const importedGems = JSON.parse(text);
-        if (!Array.isArray(importedGems)) throw new Error("Invalid JSON");
-        if(confirm(`Found ${importedGems.length} specialists. Import?`)) {
-            globalGems = [...globalGems, ...importedGems];
+
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+        try {
+            const data = JSON.parse(ev.target.result);
+            if (!Array.isArray(data)) throw new Error("File must contain array JSON");
+
+            const choice = await showImportModal(data.length);
+
+            if (choice === "cancel") {
+                updateHUD("Import cancelled", "#555");
+                return;
+            }
+
+            if (choice === "replace") {
+                globalGems = [...data];
+            } else {
+                // Append + dedupe by name
+                const existing = new Set(globalGems.map(g => g.name.trim()));
+                const toAdd = data.filter(g => !existing.has(g.name.trim()));
+                globalGems = [...globalGems, ...toAdd];
+            }
+
             await chrome.storage.local.set({ myGems: globalGems });
             loadGems();
-            updateHUD(`Imported ${importedGems.length} specialists.`, '#28a745');
+            updateHUD(`Imported ${data.length} specialists`, "#28a745");
+
+        } catch (err) {
+            console.error("Import error:", err);
+            updateHUD("Import Failed", "red");
+        } finally {
+            e.target.value = "";
         }
-    } catch (err) { console.error("Import Failed:", err); updateHUD("Import Failed: Check Console", 'red'); }
-    e.target.value = ''; 
+    };
+
+    reader.readAsText(file);
 }
 
-async function loadGems() {
-    const container = document.getElementById('gemList');
-    if (!container) return;
-    container.innerHTML = '';
-    
-    if (!chrome.storage || !chrome.storage.local) {
-        container.innerHTML = '<p style="color:red">Error: Storage permission missing.</p>';
-        return;
-    }
+// --------------------------------------------------------------------------------------
+// Load Gems
+// --------------------------------------------------------------------------------------
 
-    const result = await chrome.storage.local.get("myGems");
-    globalGems = result.myGems || [];
+async function loadGems() {
+    const list = document.getElementById('gemList');
+    if (!list) return;
+
+    list.innerHTML = "";
+
+    const stored = await chrome.storage.local.get("myGems");
+    globalGems = stored.myGems || [];
 
     if (globalGems.length === 0) {
-        container.innerHTML = '<p style="text-align:center; color:#888; margin-top:30px; font-size: 0.9em;">No Specialists hired yet.</p>';
+        list.innerHTML = `<p style="text-align:center; margin-top:20px; color:#777;">
+            No specialists yet.
+        </p>`;
         return;
     }
 
-    globalGems.forEach((gem, index) => {
-        const card = document.createElement('div');
-        card.className = 'gem-card';
-        card.style.borderLeftColor = gem.color || '#ccc';
+    globalGems.forEach((gem, idx) => {
+        const div = document.createElement("div");
+        div.className = "gem-card";
+        div.style.borderLeftColor = gem.color || "#ccc";
 
-        card.innerHTML = `
+        div.innerHTML = `
             <div class="gem-header">
                 <label class="gem-label">
-                    <input type="checkbox" value="${index}" checked> 
-                    <span style="color:${gem.color || '#333'}; margin-right:5px;">●</span>
+                    <input type="checkbox" value="${idx}" checked>
+                    <span class="color-chip" style="background-color:${gem.color || "#333"};"></span>
                     <span>${gem.name}</span>
                 </label>
                 <div>
-                    <span class="icon-btn settings-toggle" data-index="${index}" title="Edit Specialist">⚙️</span>
-                    <span class="icon-btn delete" data-index="${index}" title="Remove Specialist">🗑️</span>
+                    <span class="icon-btn settings-toggle" data-index="${idx}">⚙️</span>
+                    <span class="icon-btn delete" data-index="${idx}">🗑️</span>
                 </div>
             </div>
-            <div class="edit-panel" id="edit-panel-${index}">
-                <div class="edit-field"><label>Name</label><input type="text" class="edit-input" id="edit-name-${index}" value="${gem.name}"></div>
-                <div class="edit-field"><label>Instructions</label><textarea rows="3" class="edit-input" id="edit-role-${index}">${gem.instruction}</textarea></div>
-                <div class="color-row"><label>Color:</label><input type="color" id="edit-color-${index}" value="${gem.color || '#0078d4'}"></div>
-                <div style="display:flex; gap:5px; margin-top:5px;">
-                    <button class="btn-small update-file-btn" data-index="${index}">📂 Update File</button>
-                    <button class="btn-small" style="background:#0078d4; color:white;" onclick="saveGemEdits(${index})">Save Changes</button>
+
+            <div class="edit-panel" id="edit-panel-${idx}">
+                <div class="edit-field">
+                    <label>Name</label>
+                    <input id="edit-name-${idx}" value="${gem.name}">
                 </div>
-                <div id="edit-file-status-${index}" style="font-size:0.7em; color:green; margin-top:2px;"></div>
+
+                <div class="edit-field">
+                    <label>Instructions</label>
+                    <textarea id="edit-role-${idx}" rows="3">${gem.instruction}</textarea>
+                </div>
+
+                <div class="color-row">
+                    <label>Color:</label>
+                    <input type="color" id="edit-color-${idx}" value="${gem.color || "#0078d4"}">
+                </div>
+
+                <div style="display:flex; gap:5px; margin-top:6px;">
+                    <button class="btn-small update-file-btn" data-index="${idx}">📂 Update File</button>
+                    <button class="btn-small" style="background:#0078d4; color:white"
+                        onclick="saveGemEdits(${idx})">Save</button>
+                </div>
+
+                <div id="edit-file-status-${idx}" style="font-size:0.75em; color:green; margin-top:3px;"></div>
             </div>
         `;
-        container.appendChild(card);
+
+        list.appendChild(div);
     });
 
-    document.querySelectorAll('.settings-toggle').forEach(btn => {
-        btn.addEventListener('click', (e) => document.getElementById(`edit-panel-${e.target.dataset.index}`).classList.toggle('open'));
-    });
-    document.querySelectorAll('.delete').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-            if(!confirm("Delete Specialist?")) return;
-            globalGems.splice(e.target.dataset.index, 1);
-            await chrome.storage.local.set({ myMems: globalGems });
+    // Attach events
+    document.querySelectorAll('.settings-toggle').forEach(btn =>
+        btn.addEventListener('click', e => {
+            const id = e.target.dataset.index;
+            document.getElementById(`edit-panel-${id}`).classList.toggle("open");
+        })
+    );
+
+    document.querySelectorAll('.delete').forEach(btn =>
+        btn.addEventListener('click', async e => {
+            const id = e.target.dataset.index;
+            if (!confirm("Remove this specialist?")) return;
+            globalGems.splice(id, 1);
+            await chrome.storage.local.set({ myGems: globalGems });
             loadGems();
-        });
-    });
-    document.querySelectorAll('.update-file-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const input = document.getElementById('updateFileInput');
-            input.setAttribute('data-editing-index', e.target.dataset.index);
-            input.click();
-        });
-    });
+        })
+    );
+
+    document.querySelectorAll('.update-file-btn').forEach(btn =>
+        btn.addEventListener('click', e => {
+            const id = e.target.dataset.index;
+            const fileInput = document.getElementById('updateFileInput');
+            fileInput.setAttribute('data-editing-index', id);
+            fileInput.click();
+        })
+    );
 }
 
+// --------------------------------------------------------------------------------------
+// Save New Gem
+// --------------------------------------------------------------------------------------
+
 async function saveGem() {
-    const name = document.getElementById('newGemName').value;
-    const role = document.getElementById('newGemRole').value;
-    const color = document.getElementById('newGemColor').value;
-    if (!name || !role) return console.warn("GeminiTeams: Name/Instructions required.");
-    globalGems.push({ name, instruction: role, knowledge: currentKnowledgeText || "", color: color });
+    const name = document.getElementById('newGemName')?.value;
+    const instr = document.getElementById('newGemRole')?.value;
+    const color = document.getElementById('newGemColor')?.value || "#0078d4";
+
+    if (!name || !instr) return console.warn("Missing required fields");
+
+    globalGems.push({
+        name,
+        instruction: instr,
+        knowledge: currentKnowledgeText || "",
+        color
+    });
+
     await chrome.storage.local.set({ myGems: globalGems });
     resetForm();
-    showScreen('screen-meeting');
+    showScreen("screen-meeting");
     loadGems();
 }
 
-window.saveGemEdits = async (index) => {
-    globalGems[index].name = document.getElementById(`edit-name-${index}`).value;
-    globalGems[index].instruction = document.getElementById(`edit-role-${index}`).value;
-    globalGems[index].color = document.getElementById(`edit-color-${index}`).value;
+window.saveGemEdits = async function (idx) {
+    const g = globalGems[idx];
+    g.name = document.getElementById(`edit-name-${idx}`).value;
+    g.instruction = document.getElementById(`edit-role-${idx}`).value;
+    g.color = document.getElementById(`edit-color-${idx}`).value;
+
     await chrome.storage.local.set({ myGems: globalGems });
     loadGems();
 };
 
+// --------------------------------------------------------------------------------------
+// Update Specialist's Knowledge File
+// --------------------------------------------------------------------------------------
+
 async function handleUpdateFile(e) {
     const file = e.target.files[0];
     if (!file) return;
+
     const idx = e.target.getAttribute('data-editing-index');
     globalGems[idx].knowledge = await file.text();
-    document.getElementById(`edit-file-status-${idx}`).innerText = `Updated: ${file.name}`;
+
+    document.getElementById(`edit-file-status-${idx}`).innerText =
+        `Updated: ${file.name}`;
+
     await chrome.storage.local.set({ myGems: globalGems });
 }
 
-// --- 3. CORE LOGIC & EXECUTION ---
+// ========================================================================
+// 3. MEETING ENGINE
+// ========================================================================
 
 function setupEventListeners() {
     const goCreate = document.getElementById('goToCreateBtn');
     const cancelCreate = document.getElementById('cancelCreateBtn');
-    if(goCreate) goCreate.addEventListener('click', () => showScreen('screen-create'));
-    if(cancelCreate) cancelCreate.addEventListener('click', () => { resetForm(); showScreen('screen-meeting'); });
+    if (goCreate) goCreate.onclick = () => showScreen("screen-create");
+    if (cancelCreate) cancelCreate.onclick = () => { resetForm(); showScreen("screen-meeting"); };
 
-    const fileInput = document.getElementById('hiddenFile');
     const uploadArea = document.getElementById('uploadClickArea');
+    const fileInput = document.getElementById('hiddenFile');
     if (uploadArea && fileInput) {
-        uploadArea.addEventListener('click', () => fileInput.click());
-        fileInput.addEventListener('change', async (e) => {
+        uploadArea.onclick = () => fileInput.click();
+        fileInput.onchange = async e => {
             const file = e.target.files[0];
             if (!file) return;
             document.getElementById('fileNameDisplay').innerText = `📄 ${file.name}`;
             currentKnowledgeText = await file.text();
-        });
+        };
     }
+
+    const importBtn = document.getElementById('importFile');
+    if (importBtn) importBtn.onchange = importTeamData;
 
     const exportBtn = document.getElementById('exportBtn');
-    const importBtn = document.getElementById('importBtn');
-    const importFile = document.getElementById('importFile');
-    if (exportBtn) exportBtn.addEventListener('click', exportTeamData);
-    if (importBtn && importFile) {
-        importBtn.addEventListener('click', () => importFile.click());
-        importFile.addEventListener('change', importTeamData);
-    }
+    if (exportBtn) exportBtn.onclick = exportTeamData;
 
     const saveBtn = document.getElementById('saveGemBtn');
-    if(saveBtn) saveBtn.addEventListener('click', saveGem);
+    if (saveBtn) saveBtn.onclick = saveGem;
+
     const startBtn = document.getElementById('startMeetingBtn');
-    if(startBtn) startBtn.addEventListener('click', startMeeting);
-    
+    // R6 FIX: startMeeting handles both initial start and automated continuation
+    if (startBtn) startBtn.onclick = () => startMeeting(); 
+
     const resetBtn = document.getElementById('resetBtn');
-    if(resetBtn) resetBtn.addEventListener('click', resetConversation);
-    document.getElementById('updateFileInput').addEventListener('change', handleUpdateFile);
+    if (resetBtn) resetBtn.onclick = resetConversation;
+
+    const updateInput = document.getElementById('updateFileInput');
+    if (updateInput) updateInput.onchange = handleUpdateFile;
 }
 
-async function startMeeting() {
-    const selectedIndices = Array.from(document.querySelectorAll('#gemList input:checked')).map(cb => cb.value);
-    const topicEl = document.getElementById('userInput');
-    
-    if (selectedIndices.length === 0) return console.warn("GeminiTeams: Select at least one Specialist.");
-    if (!topicEl || !topicEl.value) return console.warn("GeminiTeams: Provide a topic.");
+// --------------------------------------------------------------------------------------
+// R6: Modified to handle both fresh start and continuation
+// --------------------------------------------------------------------------------------
+async function startMeeting(newTopic = null, isContinuation = false) {
+    const selected = [...document.querySelectorAll('#gemList input:checked')]
+        .map(cb => cb.value);
+
+    // Get the topic from the DOM unless it was passed during continuation
+    const topic = newTopic || document.getElementById('userInput')?.value;
+
+    if (!selected.length) return console.warn("Select at least one specialist");
+    if (!topic) return console.warn("Topic required");
 
     await ensureGeminiTab();
-    
-    setTheme('#333'); 
-    await updateHUD("Initializing Team...", "#333");
-    
-    document.getElementById('resetBtn').style.display = 'block';
+
+    setTheme('#333');
+    await updateHUD("Initializing team...", "#333");
+
     stopSignal = false;
-    loopCount = 0;
     
-    const selectedGems = selectedIndices.map(idx => globalGems[idx]);
-    const squadNames = selectedGems.map(g => g.name).join(", ");
-    
-    runMeetingLoop(selectedGems, topicEl.value, "User", squadNames);
+    // Only reset loopCount if this is a fresh start (not a continuation)
+    if (!isContinuation) {
+        loopCount = 0;
+    }
+
+    const squad = selected.map(i => globalGems[i]);
+    const names = squad.map(g => g.name).join(", ");
+
+    const resetBtn = document.getElementById('resetBtn');
+    if (resetBtn) resetBtn.style.display = "block";
+
+    runMeetingLoop(squad, topic, "User", names);
 }
 
+// --------------------------------------------------------------------------------------
+// The Meeting Loop
+// --------------------------------------------------------------------------------------
+
 async function runMeetingLoop(selectedGems, topic, lastSpeaker, squadNames) {
-    if (stopSignal || loopCount >= MAX_LOOPS) {
-        setTheme('#dc3545'); 
-        await updateHUD("Max Loops Reached.", "#dc3545");
+    // R6 FIX: Removed MAX_LOOPS check to align with user's request (but still dangerous)
+    if (stopSignal) {
+        setTheme("#dc3545");
+        await updateHUD("Meeting stopped by user.", "#dc3545");
         resetUI();
         return;
     }
+
     loopCount++;
 
     const btn = document.getElementById('startMeetingBtn');
-    if(btn) { btn.innerText = `🔄 Round ${loopCount}...`; btn.disabled = true; }
+    if (btn) {
+        btn.innerText = `🔄 Round ${loopCount}...`;
+        btn.disabled = true;
+    }
 
     try {
-        let currentContext = lastSpeaker;
+        let context = lastSpeaker;
 
+        // Specialist Pass
         for (const gem of selectedGems) {
             if (stopSignal) return;
-            
-            const activeColor = gem.color || "#0078d4";
-            setTheme(activeColor); 
-            await updateHUD(`${gem.name} is thinking...`, activeColor); 
+
+            setTheme(gem.color || "#0078d4");
+            await updateHUD(`${gem.name} is thinking...`, gem.color || "#0078d4");
 
             const prompt = `
 *** ROLE: ${gem.name} ***
 CORE INSTRUCTIONS: ${gem.instruction}
 
-*** SQUAD PROTOCOL: DYNAMIC DEFERENCE ***
 ACTIVE TEAM: ${squadNames}
 CURRENT TOPIC: "${topic}"
 
-RULES OF ENGAGEMENT:
-1. IDENTIFY THE EXPERT: Look at the 'Active Team' list and the 'Current Topic'.
-2. SELF-ASSESSMENT: Are you the execution authority?
-   - IF YES: Provide concrete plan/code.
-   - IF NO: Defer execution details to the Authority.
-3. ROLE SPECIFIC OVERRIDES (The "Yes, And" Rule):
-   - **Creative/Designers:** If the topic is technical (e.g., scraping, databases), DO NOT discuss the backend. Instead, ask: "How will we visualize this?" or "What is the user experience?" Pivot to Dashboards, UI, or UX immediately.
-   - **Architects:** Focus on Risk, Scope, and Integration. Do not debug code unless it breaks architecture.
+CONTEXT: Previous speaker was ${context}.
 
-CONTEXT: Previous input from: ${currentContext}.
-YOUR KNOWLEDGE BASE: ${gem.knowledge.substring(0, 15000)}
+YOUR KNOWLEDGE:
+${(gem.knowledge || "").substring(0, 15000)}
 
-TASK: Offer your expert input adhering to the PROTOCOL above.
-            `;
+TASK: Respond as your role, following DYNAMIC DEFERENCE PROTOCOL.
+`;
 
             await injectPromptIntoGemini(prompt);
+            // Wait for AI to finish typing
             await waitForIdleState();
-            currentContext = gem.name;
-            await new Promise(r => setTimeout(r, 2000));
+
+            context = gem.name;
+            await new Promise(r => setTimeout(r, 1500));
         }
 
-        if (stopSignal) return;
+        // PM Phase
+        setTheme("#28a745");
+        await updateHUD("Project Manager summarizing...", "#28a745");
 
-        // B. PM PHASE
-        setTheme('#28a745'); // Green for PM
-        await updateHUD("Project Manager Synthesizing...", "#28a745");
-        
-        const pmPrompt = `
+        await injectPromptIntoGemini(`
 *** ROLE: Project Manager ***
-CONTEXT: Review responses regarding "${topic}".
-TASK: Summarize consensus and ask User if they want more feedback from specific specialists.
-        `;
-        await injectPromptIntoGemini(pmPrompt);
+Summarize team positions on "${topic}". Ask user if they want more input.
+`);
+
         await waitForIdleState();
 
-        if (stopSignal) return;
+        // ✅ R6 FIX: PAUSE AND START MONITORING FOR AUTOMATED RESTART
+        setTheme("#666");
+        await updateHUD("Meeting Paused: Waiting for user input...", "#666");
 
-        // C. LISTENING PHASE
-        setTheme('#666'); // Grey for Listening
-        await updateHUD("Waiting for Reply...", "#666");
+        // Send message to content.js to begin monitoring for the user's next message
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         
-        const userReply = await waitForUserReply();
-        if (userReply && !stopSignal) {
-            runMeetingLoop(selectedGems, userReply, "The User (You)", squadNames);
-        } else {
-            removeHUD(); 
-            resetUI();
-        }
+        await chrome.tabs.sendMessage(tab.id, { 
+            action: 'START_MONITORING', 
+            userQuerySelector: SELECTORS.editor
+        });
 
-    } catch (e) {
+        // The meeting thread now exits and waits for the message listener (in global scope) to fire.
+
+    } catch (err) {
+        console.error(err);
         if (!stopSignal) {
-            console.error(e);
-            await updateHUD("Fatal Error: Check Console", "red");
+            updateHUD("Fatal Error — Check Console", "red");
             resetUI();
         }
     }
 }
 
+// --------------------------------------------------------------------------------------
+// Ensure Gemini Tab Open
+// --------------------------------------------------------------------------------------
+
 async function ensureGeminiTab() {
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
     if (!tab || !tab.url.includes("gemini.google.com")) {
-        const geminiTabs = await chrome.tabs.query({ url: "*://gemini.google.com/*" });
-        if (geminiTabs.length > 0) {
-            await chrome.tabs.update(geminiTabs[0].id, { active: true });
+        const tabs = await chrome.tabs.query({ url: "*://gemini.google.com/*" });
+
+        if (tabs.length > 0) {
+            await chrome.tabs.update(tabs[0].id, { active: true });
         } else {
             await chrome.tabs.create({ url: "https://gemini.google.com" });
         }
+
         await new Promise(r => setTimeout(r, 2000));
     }
 }
 
-async function injectPromptIntoGemini(text) {
+// --------------------------------------------------------------------------------------
+// Inject Prompt into Gemini
+// --------------------------------------------------------------------------------------
+
+async function injectPromptIntoGemini(msg) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
     await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: async (msg, sel) => {
-            const editor = document.querySelector(sel.editor); 
-            if (editor) {
-                editor.focus();
-                document.execCommand('selectAll', false, null);
-                document.execCommand('insertText', false, msg);
-                await new Promise(r => setTimeout(r, 500));
-                const btn = document.querySelector(sel.sendBtn);
-                if(btn) { btn.click(); await new Promise(r => setTimeout(r, 3000)); }
+        func: async (txt, sel) => {
+            const editor = document.querySelector(sel.editor);
+            if (!editor) return;
+
+            editor.focus();
+            document.execCommand("selectAll", false, null);
+            document.execCommand("insertText", false, txt);
+
+            await new Promise(r => setTimeout(r, 400));
+
+            const btn = document.querySelector(sel.sendBtn);
+            if (btn) {
+                btn.click();
+                await new Promise(r => setTimeout(r, 2500));
             }
         },
-        args: [text, SELECTORS]
+        args: [msg, SELECTORS]
     });
 }
 
+// --------------------------------------------------------------------------------------
+// ✅ R2 FIX: Wait for Gemini to Finish Thinking (Robust Check)
+// --------------------------------------------------------------------------------------
+
 async function waitForIdleState() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    await chrome.scripting.executeScript({
+
+    return chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: (sel) => {
-            return new Promise(r => {
-                const getBtn = () => document.querySelector(sel.sendBtn);
-                const check = () => {
-                    const btn = getBtn();
-                    return btn && !btn.hasAttribute('disabled') && btn.getAttribute('aria-disabled') !== 'true';
-                };
+        func: (selectors) => {
+            return new Promise(resolve => {
                 
-                if (check()) return r(true);
+                // --- ROBUST CHECK LOGIC ---
+                const AI_LOADING_SELECTORS = [
+                    'div[data-testid*="generating"]', 
+                    'div[aria-busy="true"]',
+                    '.loading-indicator'
+                ];
+                
+                const isIdle = () => {
+                    // Check 1: Is the send button enabled?
+                    const btn = document.querySelector(selectors.sendBtn);
+                    const isSendReady = btn && !btn.disabled && btn.getAttribute("aria-disabled") !== "true";
+                    
+                    // Check 2: Are any known loading/generating indicators present?
+                    const isAILoading = AI_LOADING_SELECTORS.some(s => document.querySelector(s));
+                    
+                    return isSendReady && !isAILoading;
+                };
+
+                if (isIdle()) return resolve(true);
+
                 const obs = new MutationObserver(() => {
-                    if (check()) { obs.disconnect(); r(true); }
+                    if (isIdle()) {
+                        obs.disconnect();
+                        resolve(true);
+                    }
                 });
-                obs.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['disabled'] });
-                setTimeout(() => { obs.disconnect(); r(true); }, 45000);
+
+                obs.observe(document.body, {
+                    subtree: true,
+                    attributes: true,
+                    childList: true
+                });
+                
+                setTimeout(() => {
+                    obs.disconnect();
+                    console.warn('GeminiTeams: Timeout reached waiting for AI idle state (60s). Proceeding...');
+                    resolve(false);
+                }, 60000);
             });
         },
         args: [SELECTORS]
     });
 }
 
-async function waitForUserReply() {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    return await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => {
-            return new Promise(r => {
-                const getCount = () => document.querySelectorAll('.user-query').length || document.querySelectorAll('[data-test-id="user-query"]').length;
-                const initial = getCount();
-                const poll = setInterval(() => {
-                    if (getCount() > initial) {
-                        clearInterval(poll);
-                        const queries = document.querySelectorAll('.user-query'); 
-                        resolve(queries[queries.length - 1]?.innerText || "Reply");
-                    }
-                }, 1000);
-            });
-        }
-    }).then(results => results[0].result);
-}
+
+// ========================================================================
+// Init
+// ========================================================================
+
+document.addEventListener("DOMContentLoaded", async () => {
+    setupEventListeners();
+    const stored = await chrome.storage.local.get("myGems");
+    globalGems = stored.myGems || [];
+    loadGems();
+});

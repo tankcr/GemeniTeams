@@ -1,0 +1,50 @@
+// Content script to monitor for user replies and signal the side panel
+
+// NOTE: The Content Script environment does not have access to SELECTORS from the side panel.
+// We only watch for the specific message sent from the side panel to start monitoring.
+
+let observer = null;
+let initialQueryCount = 0;
+
+// Listen for messages from the Side Panel
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'START_MONITORING') {
+        startUserReplyMonitor(request.userQuerySelector);
+        sendResponse({ status: 'Monitoring started' });
+        return true; 
+    }
+    return false;
+});
+
+function startUserReplyMonitor(querySelector) {
+    // Stop any existing observer
+    if (observer) {
+        observer.disconnect();
+        observer = null;
+    }
+
+    const getUserQueries = () =>
+        document.querySelectorAll(querySelector);
+    
+    // Set the baseline count of user messages currently on the screen
+    initialQueryCount = getUserQueries().length;
+
+    // We observe the body for changes in the number of user messages
+    observer = new MutationObserver((mutationsList, observer) => {
+        const currentCount = getUserQueries().length;
+
+        // If a new user message has appeared since monitoring started
+        if (currentCount > initialQueryCount) {
+            observer.disconnect();
+            
+            // Signal the side panel to restart the meeting
+            chrome.runtime.sendMessage({ action: 'USER_REPLY_SENT' }); 
+        }
+    });
+
+    // Start observing the body for changes in children (new messages)
+    observer.observe(document.body, { 
+        childList: true, 
+        subtree: true 
+    });
+}

@@ -1,13 +1,19 @@
 {
   "manifest_version": 3,
   "name": "GeminiTeams",
-  "version": "2.0",
+  "version": "2.1",
   "description": "Orchestrate a team of Gemini specialists with internal storage.",
-  "permissions": ["sidePanel", "storage", "unlimitedStorage", "scripting", "activeTab"],
+  "permissions": ["sidePanel", "storage", "unlimitedStorage", "scripting", "activeTab", "tabs"],
   "host_permissions": ["https://gemini.google.com/*"],
   "background": {
     "service_worker": "background.js"
   },
+  "content_scripts": [
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["content.js"]
+    }
+  ],
   "side_panel": {
     "default_path": "sidepanel.html"
   },

@@ -1,7 +1,7 @@
 /* .About
     File Name:  sidepanel.js
     Author:     Kristopher Roy
-    Purpose:    v2.7 - Silent Operation (Removed all alert() dialogs)
+    Purpose:    v3.6 - FINAL VISUAL ALIGNMENT FIX (Complete Logic Set)
 */
 
 // --- CONFIGURATION ---
@@ -14,71 +14,124 @@ let currentKnowledgeText = "";
 let globalGems = []; 
 let SELECTORS = { editor: '.ql-editor, div[contenteditable="true"]', sendBtn: 'button[aria-label="Send message"]' };
 
-// --- 1. INITIALIZATION ---
-window.addEventListener('load', async () => {
-    try {
-        console.log("GeminiTeams: UI Loaded.");
-        await fetchRemoteConfig();
-        loadGems();
-        setupEventListeners();
-        document.querySelector('header').style.transition = "background 0.5s ease";
-        document.body.style.transition = "border-color 0.5s ease";
-        document.body.style.borderLeft = "5px solid #0078d4"; // Initial setup
-        setTheme('#0078d4'); // Set default theme
-    } catch (e) {
-        console.error("GeminiTeams Init Error:", e);
-    }
-});
+// ========================================================================
+// 1. UTILITY & VISUAL FUNCTIONS (Independent Helpers)
+// ========================================================================
 
-async function fetchRemoteConfig() {
-    try {
-        const r = await fetch(GITHUB_CONFIG_URL);
-        if (r.ok) {
-            const json = await r.json();
-            if (json.editor) SELECTORS = json;
-        }
-    } catch (e) { console.warn("Using Fallback Config"); }
-}
-
-function setupEventListeners() {
-    const goCreate = document.getElementById('goToCreateBtn');
-    const cancelCreate = document.getElementById('cancelCreateBtn');
-    if(goCreate) goCreate.addEventListener('click', () => showScreen('screen-create'));
-    if(cancelCreate) cancelCreate.addEventListener('click', () => { resetForm(); showScreen('screen-meeting'); });
-
-    const newFileBtn = document.getElementById('newFileBtn');
-    const newFileInput = document.getElementById('newFileInput');
-    if (newFileBtn) {
-        newFileBtn.addEventListener('click', () => newFileInput.click());
-        newFileInput.addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            document.getElementById('newFileDisplay').innerText = `📄 ${file.name}`;
-            currentKnowledgeText = await file.text();
-        });
-    }
-    document.getElementById('saveGemBtn').addEventListener('click', createNewGem);
-    document.getElementById('startMeetingBtn').addEventListener('click', startMeeting);
-    document.getElementById('resetBtn').addEventListener('click', resetConversation);
-    document.getElementById('exportBtn').addEventListener('click', exportTeamData);
-    
-    const impBtn = document.getElementById('importBtn');
-    const impFile = document.getElementById('importFile');
-    if (impBtn) {
-        impBtn.addEventListener('click', () => impFile.click());
-        impFile.addEventListener('change', importTeamData);
-    }
-    document.getElementById('updateFileInput').addEventListener('change', handleUpdateFile);
-}
-
-// --- 2. VISUAL THEME ENGINE (CHAMELEON) ---
 function setTheme(color) {
     const header = document.querySelector('header');
     if (header) header.style.background = color;
     document.body.style.borderLeftColor = color;
 }
 
-// --- 3. RENDER & EDIT LOGIC ---
+function showScreen(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active-screen'));
+    const target = document.getElementById(id);
+    if(target) target.classList.add('active-screen');
+}
+
+function resetForm() {
+    const nameInput = document.getElementById('newGemName');
+    const roleInput = document.getElementById('newGemRole');
+    const fileInput = document.getElementById('hiddenFile');
+    const display = document.getElementById('fileNameDisplay');
+    if(nameInput) nameInput.value = "";
+    if(roleInput) roleInput.value = "";
+    if(fileInput) fileInput.value = "";
+    if(display) display.innerText = "📂 Click to Attach File";
+    currentKnowledgeText = "";
+}
+
+function resetConversation() {
+    stopSignal = true;
+    setTheme('#0078d4'); 
+    removeHUD();
+    resetUI();
+}
+
+function resetUI() {
+    document.getElementById('startMeetingBtn').disabled = false;
+    document.getElementById('resetBtn').style.display = 'none';
+    setTheme('#0078d4'); 
+    removeHUD();
+}
+
+// --- VISUAL & COMMUNICATION UTILS ---
+
+async function updateHUD(text, color) {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: (t, c) => {
+            let h = document.getElementById('gemini-hud');
+            if (!h) {
+                h = document.createElement('div'); h.id = 'gemini-hud';
+                Object.assign(h.style, {
+                    position:'fixed', top:'20px', right:'20px', padding:'10px 20px',
+                    background:'rgba(255,255,255,0.95)', borderLeft:'5px solid #333',
+                    borderRadius:'8px', boxShadow:'0 4px 12px rgba(0,0,0,0.15)',
+                    zIndex:'99999', fontFamily:'sans-serif', fontSize:'14px', fontWeight:'bold'
+                });
+                document.body.appendChild(h);
+            }
+            h.style.borderLeftColor = c; h.innerText = t; h.style.display = 'block';
+        },
+        args: [text, color]
+    });
+}
+
+async function removeHUD() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => { const h = document.getElementById('gemini-hud'); if(h) h.style.display='none'; }
+    });
+}
+
+// ========================================================================
+// 2. DATA & CONFIG OPS
+// ========================================================================
+
+async function fetchRemoteConfig() {
+    try {
+        const response = await fetch(GITHUB_CONFIG_URL, { cache: "no-store" });
+        if (!response.ok) throw new Error("Network response was not ok");
+        const remoteSelectors = await response.json();
+        
+        if (remoteSelectors.editor && remoteSelectors.sendBtn) {
+            SELECTORS = remoteSelectors;
+        }
+    } catch (error) { console.warn(`GeminiTeams: Using Fallback Config (${error.message}).`); }
+}
+
+async function exportTeamData() {
+    if (globalGems.length === 0) return console.warn("GeminiTeams: No specialists to export.");
+    const dataStr = JSON.stringify(globalGems, null, 2);
+    const blob = new Blob([dataStr], {type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = "gemini_team_backup.json";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+async function importTeamData(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+        const text = await file.text();
+        const importedGems = JSON.parse(text);
+        if (!Array.isArray(importedGems)) throw new Error("Invalid JSON");
+        if(confirm(`Found ${importedGems.length} specialists. Import?`)) {
+            globalGems = [...globalGems, ...importedGems];
+            await chrome.storage.local.set({ myGems: globalGems });
+            loadGems();
+            updateHUD(`Imported ${importedGems.length} specialists.`, '#28a745');
+        }
+    } catch (err) { console.error("Import Failed:", err); updateHUD("Import Failed: Check Console", 'red'); }
+    e.target.value = ''; 
+}
+
 async function loadGems() {
     const container = document.getElementById('gemList');
     if (!container) return;
@@ -106,12 +159,12 @@ async function loadGems() {
             <div class="gem-header">
                 <label class="gem-label">
                     <input type="checkbox" value="${index}" checked> 
-                    <span style="color:${gem.color || '#333'}">●</span>
+                    <span style="color:${gem.color || '#333'}; margin-right:5px;">●</span>
                     <span>${gem.name}</span>
                 </label>
                 <div>
-                    <span class="icon-btn settings-toggle" data-index="${index}">⚙️</span>
-                    <span class="icon-btn delete" data-index="${index}">🗑️</span>
+                    <span class="icon-btn settings-toggle" data-index="${index}" title="Edit Specialist">⚙️</span>
+                    <span class="icon-btn delete" data-index="${index}" title="Remove Specialist">🗑️</span>
                 </div>
             </div>
             <div class="edit-panel" id="edit-panel-${index}">
@@ -131,16 +184,14 @@ async function loadGems() {
     document.querySelectorAll('.settings-toggle').forEach(btn => {
         btn.addEventListener('click', (e) => document.getElementById(`edit-panel-${e.target.dataset.index}`).classList.toggle('open'));
     });
-
     document.querySelectorAll('.delete').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             if(!confirm("Delete Specialist?")) return;
             globalGems.splice(e.target.dataset.index, 1);
-            await chrome.storage.local.set({ myGems: globalGems });
+            await chrome.storage.local.set({ myMems: globalGems });
             loadGems();
         });
     });
-
     document.querySelectorAll('.update-file-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             const input = document.getElementById('updateFileInput');
@@ -150,16 +201,14 @@ async function loadGems() {
     });
 }
 
-async function createNewGem() {
+async function saveGem() {
     const name = document.getElementById('newGemName').value;
     const role = document.getElementById('newGemRole').value;
     const color = document.getElementById('newGemColor').value;
     if (!name || !role) return console.warn("GeminiTeams: Name/Instructions required.");
-    globalGems.push({ name, instruction: role, knowledge: tempCreateKnowledge || "", color: color });
+    globalGems.push({ name, instruction: role, knowledge: currentKnowledgeText || "", color: color });
     await chrome.storage.local.set({ myGems: globalGems });
-    document.getElementById('newGemName').value = "";
-    document.getElementById('newGemRole').value = "";
-    tempCreateKnowledge = "";
+    resetForm();
     showScreen('screen-meeting');
     loadGems();
 }
@@ -181,20 +230,56 @@ async function handleUpdateFile(e) {
     await chrome.storage.local.set({ myGems: globalGems });
 }
 
-// --- 4. MEETING ENGINE (COLOR SYNCED) ---
+// --- 3. CORE LOGIC & EXECUTION ---
+
+function setupEventListeners() {
+    const goCreate = document.getElementById('goToCreateBtn');
+    const cancelCreate = document.getElementById('cancelCreateBtn');
+    if(goCreate) goCreate.addEventListener('click', () => showScreen('screen-create'));
+    if(cancelCreate) cancelCreate.addEventListener('click', () => { resetForm(); showScreen('screen-meeting'); });
+
+    const fileInput = document.getElementById('hiddenFile');
+    const uploadArea = document.getElementById('uploadClickArea');
+    if (uploadArea && fileInput) {
+        uploadArea.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            document.getElementById('fileNameDisplay').innerText = `📄 ${file.name}`;
+            currentKnowledgeText = await file.text();
+        });
+    }
+
+    const exportBtn = document.getElementById('exportBtn');
+    const importBtn = document.getElementById('importBtn');
+    const importFile = document.getElementById('importFile');
+    if (exportBtn) exportBtn.addEventListener('click', exportTeamData);
+    if (importBtn && importFile) {
+        importBtn.addEventListener('click', () => importFile.click());
+        importFile.addEventListener('change', importTeamData);
+    }
+
+    const saveBtn = document.getElementById('saveGemBtn');
+    if(saveBtn) saveBtn.addEventListener('click', saveGem);
+    const startBtn = document.getElementById('startMeetingBtn');
+    if(startBtn) startBtn.addEventListener('click', startMeeting);
+    
+    const resetBtn = document.getElementById('resetBtn');
+    if(resetBtn) resetBtn.addEventListener('click', resetConversation);
+    document.getElementById('updateFileInput').addEventListener('change', handleUpdateFile);
+}
 
 async function startMeeting() {
     const selectedIndices = Array.from(document.querySelectorAll('#gemList input:checked')).map(cb => cb.value);
     const topicEl = document.getElementById('userInput');
     
     if (selectedIndices.length === 0) return console.warn("GeminiTeams: Select at least one Specialist.");
-    if (!topicEl || !topicEl.value) return console.warn("GeminiTeams: Please provide a topic.");
+    if (!topicEl || !topicEl.value) return console.warn("GeminiTeams: Provide a topic.");
 
     await ensureGeminiTab();
     
-    // Default Start Color
     setTheme('#333'); 
-    await updateHUD("Initializing...", "#333");
+    await updateHUD("Initializing Team...", "#333");
     
     document.getElementById('resetBtn').style.display = 'block';
     stopSignal = false;
@@ -208,7 +293,7 @@ async function startMeeting() {
 
 async function runMeetingLoop(selectedGems, topic, lastSpeaker, squadNames) {
     if (stopSignal || loopCount >= MAX_LOOPS) {
-        setTheme('#dc3545'); // Red for Stop
+        setTheme('#dc3545'); 
         await updateHUD("Max Loops Reached.", "#dc3545");
         resetUI();
         return;
@@ -221,11 +306,9 @@ async function runMeetingLoop(selectedGems, topic, lastSpeaker, squadNames) {
     try {
         let currentContext = lastSpeaker;
 
-        // A. SPECIALIST PHASE
         for (const gem of selectedGems) {
             if (stopSignal) return;
             
-            // USE THE GEM'S CUSTOM COLOR for HUD and SIDE PANEL
             const activeColor = gem.color || "#0078d4";
             setTheme(activeColor); 
             await updateHUD(`${gem.name} is thinking...`, activeColor); 
@@ -283,7 +366,6 @@ TASK: Summarize consensus and ask User if they want more feedback from specific 
         if (userReply && !stopSignal) {
             runMeetingLoop(selectedGems, userReply, "The User (You)", squadNames);
         } else {
-            // Clean up if user clicked reset
             removeHUD(); 
             resetUI();
         }
@@ -296,21 +378,6 @@ TASK: Summarize consensus and ask User if they want more feedback from specific 
         }
     }
 }
-
-function resetConversation() {
-    stopSignal = true;
-    setTheme('#0078d4'); // Reset to Default Blue
-    removeHUD();
-    resetUI();
-}
-
-function resetUI() {
-    document.getElementById('startMeetingBtn').disabled = false;
-    document.getElementById('resetBtn').style.display = 'none';
-    removeHUD();
-}
-
-// --- UTILS & VISUAL INJECTION ---
 
 async function ensureGeminiTab() {
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -325,49 +392,19 @@ async function ensureGeminiTab() {
     }
 }
 
-async function updateHUD(text, color) {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: (t, c) => {
-            let h = document.getElementById('gemini-hud');
-            if (!h) {
-                h = document.createElement('div'); h.id = 'gemini-hud';
-                Object.assign(h.style, {
-                    position:'fixed', top:'20px', right:'20px', padding:'10px 20px',
-                    background:'rgba(255,255,255,0.95)', borderLeft:'5px solid #333',
-                    borderRadius:'8px', boxShadow:'0 4px 12px rgba(0,0,0,0.15)',
-                    zIndex:'99999', fontFamily:'sans-serif', fontSize:'14px', fontWeight:'bold'
-                });
-                document.body.appendChild(h);
-            }
-            h.style.borderLeftColor = c; h.innerText = t; h.style.display = 'block';
-        },
-        args: [text, color]
-    });
-}
-
-async function removeHUD() {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => { const h = document.getElementById('gemini-hud'); if(h) h.style.display='none'; }
-    });
-}
-
 async function injectPromptIntoGemini(text) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: async (msg, sel) => {
-            const editor = document.querySelector(sel.editor);
+            const editor = document.querySelector(sel.editor); 
             if (editor) {
                 editor.focus();
                 document.execCommand('selectAll', false, null);
                 document.execCommand('insertText', false, msg);
                 await new Promise(r => setTimeout(r, 500));
                 const btn = document.querySelector(sel.sendBtn);
-                if(btn) { btn.click(); await new Promise(r => setTimeout(r, 3000)); } // Handshake Delay Included
+                if(btn) { btn.click(); await new Promise(r => setTimeout(r, 3000)); }
             }
         },
         args: [text, SELECTORS]
@@ -415,5 +452,5 @@ async function waitForUserReply() {
                 }, 1000);
             });
         }
-    }).then(res => res[0].result);
+    }).then(results => results[0].result);
 }
